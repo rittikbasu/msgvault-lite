@@ -194,6 +194,69 @@ strip_signatures = false
 	}
 }
 
+// TestPreprocessConfig_NewToggleDefaults exercises the pointer-bool
+// behavior of the four sanitization toggles added alongside the original
+// strip_quotes / strip_signatures pair: each defaults to true when
+// omitted, and an explicit false in TOML is preserved verbatim.
+func TestPreprocessConfig_NewToggleDefaults(t *testing.T) {
+	t.Run("all_omitted_default_true", func(t *testing.T) {
+		var p PreprocessConfig
+		if _, err := toml.Decode(``, &p); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !p.StripHTMLEnabled() {
+			t.Error("StripHTMLEnabled() = false, want true")
+		}
+		if !p.StripBase64Enabled() {
+			t.Error("StripBase64Enabled() = false, want true")
+		}
+		if !p.StripURLTrackingEnabled() {
+			t.Error("StripURLTrackingEnabled() = false, want true")
+		}
+		if !p.CollapseWhitespaceEnabled() {
+			t.Error("CollapseWhitespaceEnabled() = false, want true")
+		}
+	})
+
+	t.Run("all_explicit_false", func(t *testing.T) {
+		var p PreprocessConfig
+		raw := `
+strip_html = false
+strip_base64 = false
+strip_url_tracking = false
+collapse_whitespace = false
+`
+		if _, err := toml.Decode(raw, &p); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if p.StripHTMLEnabled() {
+			t.Error("StripHTMLEnabled() = true, want false")
+		}
+		if p.StripBase64Enabled() {
+			t.Error("StripBase64Enabled() = true, want false")
+		}
+		if p.StripURLTrackingEnabled() {
+			t.Error("StripURLTrackingEnabled() = true, want false")
+		}
+		if p.CollapseWhitespaceEnabled() {
+			t.Error("CollapseWhitespaceEnabled() = true, want false")
+		}
+	})
+
+	t.Run("one_false_others_default_true", func(t *testing.T) {
+		var p PreprocessConfig
+		if _, err := toml.Decode(`strip_base64 = false`, &p); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if p.StripBase64Enabled() {
+			t.Error("StripBase64Enabled() should be false (explicit)")
+		}
+		if !p.StripHTMLEnabled() || !p.StripURLTrackingEnabled() || !p.CollapseWhitespaceEnabled() {
+			t.Error("omitted toggles should still default to true")
+		}
+	})
+}
+
 // TestApplyDefaults_OverridesZeroValues verifies that zero-valued numeric
 // fields get normalized to the documented defaults, so an omitted (or
 // explicit 0) max_retries / timeout in TOML doesn't silently disable the
@@ -307,5 +370,130 @@ func TestSearchConfig_PointerSemantics_FromTOML(t *testing.T) {
 				t.Errorf("MaxPageSizeHybridClamp() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPreprocessConfig_FingerprintFormat pins the human-readable format
+// (p<ver>-<flags>) so the generation-fingerprint string in stats output
+// and DB rows is stable for operators.
+func TestPreprocessConfig_FingerprintFormat(t *testing.T) {
+	allOn := PreprocessConfig{}
+	if got := allOn.Fingerprint(); got != "p1-111111" {
+		t.Errorf("default Fingerprint() = %q, want p1-111111", got)
+	}
+
+	f := false
+	allOff := PreprocessConfig{
+		StripQuotes:        &f,
+		StripSignatures:    &f,
+		StripHTML:          &f,
+		StripBase64:        &f,
+		StripURLTracking:   &f,
+		CollapseWhitespace: &f,
+	}
+	if got := allOff.Fingerprint(); got != "p1-000000" {
+		t.Errorf("all-off Fingerprint() = %q, want p1-000000", got)
+	}
+}
+
+// TestPreprocessConfig_FingerprintChangesPerToggle ensures every toggle
+// participates in the fingerprint so flipping any one of them stales
+// the index. Without per-toggle coverage a future refactor could
+// accidentally drop one from the hash and re-introduce the silent
+// mid-generation policy drift this fingerprint was built to prevent.
+func TestPreprocessConfig_FingerprintChangesPerToggle(t *testing.T) {
+	baseline := PreprocessConfig{}.Fingerprint()
+	f := false
+	cases := []struct {
+		name string
+		cfg  PreprocessConfig
+	}{
+		{"strip_quotes", PreprocessConfig{StripQuotes: &f}},
+		{"strip_signatures", PreprocessConfig{StripSignatures: &f}},
+		{"strip_html", PreprocessConfig{StripHTML: &f}},
+		{"strip_base64", PreprocessConfig{StripBase64: &f}},
+		{"strip_url_tracking", PreprocessConfig{StripURLTracking: &f}},
+		{"collapse_whitespace", PreprocessConfig{CollapseWhitespace: &f}},
+	}
+	seen := map[string]string{baseline: "all-on baseline"}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.cfg.Fingerprint()
+			if got == baseline {
+				t.Errorf("Fingerprint() with %s=false = %q, want different from baseline %q",
+					tc.name, got, baseline)
+			}
+			if other, dup := seen[got]; dup {
+				t.Errorf("Fingerprint() with %s=false = %q, collides with %s",
+					tc.name, got, other)
+			}
+			seen[got] = tc.name
+		})
+	}
+}
+
+// TestConfig_GenerationFingerprintFolds checks the full identifier
+// composition. The shape is "<model>:<dim>:<preprocess>:c<maxchars>"
+// — every segment must contribute so an operator switching the model,
+// any preprocess toggle, or the truncation cap stales the existing
+// index instead of silently mixing inconsistently-prepared vectors.
+func TestConfig_GenerationFingerprintFolds(t *testing.T) {
+	base := Config{
+		Embeddings: EmbeddingsConfig{Model: "nomic-embed", Dimension: 768, MaxInputChars: 6000},
+	}
+	got := base.GenerationFingerprint()
+	want := "nomic-embed:768:p1-111111:c6000"
+	if got != want {
+		t.Errorf("GenerationFingerprint() = %q, want %q", got, want)
+	}
+
+	// Flipping the model invalidates.
+	modelChanged := base
+	modelChanged.Embeddings.Model = "snowflake-arctic"
+	if modelChanged.GenerationFingerprint() == got {
+		t.Error("GenerationFingerprint() did not change when Model changed")
+	}
+
+	// Flipping a preprocess toggle invalidates too — this is the gap
+	// the reviewer flagged in round one. Without folding Preprocess
+	// into the fingerprint, the active generation would keep absorbing
+	// new vectors built under a different sanitization policy.
+	f := false
+	preprocessChanged := base
+	preprocessChanged.Preprocess.StripHTML = &f
+	if preprocessChanged.GenerationFingerprint() == got {
+		t.Error("GenerationFingerprint() did not change when strip_html flipped to false")
+	}
+}
+
+// TestConfig_GenerationFingerprint_IncludesMaxInputChars pins the gap
+// flagged in roborev round two: MaxInputChars is the rune-bounded
+// truncation cap fed straight into Preprocess() by the embed worker,
+// so changing it produces a different embedded string for any message
+// whose preprocessed form exceeds either the old or new cap. Two
+// different cap values therefore produce two different embedding
+// spaces and must not share one active generation.
+func TestConfig_GenerationFingerprint_IncludesMaxInputChars(t *testing.T) {
+	base := Config{
+		Embeddings: EmbeddingsConfig{Model: "m", Dimension: 8, MaxInputChars: 6000},
+	}
+	baseline := base.GenerationFingerprint()
+
+	bumped := base
+	bumped.Embeddings.MaxInputChars = 12000
+	if bumped.GenerationFingerprint() == baseline {
+		t.Errorf("GenerationFingerprint() did not change when MaxInputChars went 6000→12000 (still %q)",
+			baseline)
+	}
+
+	// The zero-cap case (Preprocess treats <=0 as "no truncation")
+	// must also be distinguishable from any positive cap, otherwise
+	// disabling truncation later wouldn't stale a generation that had
+	// always been truncating.
+	zeroed := base
+	zeroed.Embeddings.MaxInputChars = 0
+	if zeroed.GenerationFingerprint() == baseline {
+		t.Errorf("GenerationFingerprint() did not change when MaxInputChars went 6000→0 (still %q)",
+			baseline)
 	}
 }

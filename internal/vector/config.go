@@ -7,8 +7,20 @@ package vector
 import (
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
+
+// preprocessVersion identifies the embed/preprocess.go implementation
+// generation. Bump whenever a change to that file produces a different
+// Preprocess() output for the same PreprocessConfig flags — for
+// example: tightening a regex, adding a tracking-param key, or adding
+// a new default-on transform. Combined with the effective flag tuple
+// in PreprocessConfig.Fingerprint, it makes Config.GenerationFingerprint
+// invalidate any index built under a different preprocessing policy so
+// the operator must --full-rebuild rather than silently mixing
+// inconsistently-prepared vectors in one generation.
+const preprocessVersion = 1
 
 // Config is the top-level vector-search configuration, loaded from the
 // [vector] TOML table.
@@ -40,11 +52,14 @@ type EmbeddingsConfig struct {
 //
 // Fields are pointers so the decoder can distinguish "unset" (nil,
 // defaults to true) from an explicit `false` in the TOML file. Call the
-// StripQuotesEnabled / StripSignaturesEnabled helpers to resolve the
-// effective value.
+// XxxEnabled helpers to resolve the effective value.
 type PreprocessConfig struct {
-	StripQuotes     *bool `toml:"strip_quotes"`
-	StripSignatures *bool `toml:"strip_signatures"`
+	StripQuotes        *bool `toml:"strip_quotes"`
+	StripSignatures    *bool `toml:"strip_signatures"`
+	StripHTML          *bool `toml:"strip_html"`
+	StripBase64        *bool `toml:"strip_base64"`
+	StripURLTracking   *bool `toml:"strip_url_tracking"`
+	CollapseWhitespace *bool `toml:"collapse_whitespace"`
 }
 
 // StripQuotesEnabled returns the effective strip_quotes setting.
@@ -63,6 +78,80 @@ func (p PreprocessConfig) StripSignaturesEnabled() bool {
 		return true
 	}
 	return *p.StripSignatures
+}
+
+// StripHTMLEnabled returns the effective strip_html setting.
+// Defaults to true when the field is unset — HTML markup that leaks into
+// body_text tokenizes densely (punctuation-heavy) without contributing
+// semantic content.
+func (p PreprocessConfig) StripHTMLEnabled() bool {
+	if p.StripHTML == nil {
+		return true
+	}
+	return *p.StripHTML
+}
+
+// StripBase64Enabled returns the effective strip_base64 setting.
+// Defaults to true when the field is unset — inline base64 blobs (images,
+// embedded MIME parts) inflate token counts without contributing
+// retrievable meaning.
+func (p PreprocessConfig) StripBase64Enabled() bool {
+	if p.StripBase64 == nil {
+		return true
+	}
+	return *p.StripBase64
+}
+
+// StripURLTrackingEnabled returns the effective strip_url_tracking setting.
+// Defaults to true when the field is unset — utm_*, fbclid, etc. add no
+// semantic value and make otherwise-identical URLs look distinct to the
+// embedder.
+func (p PreprocessConfig) StripURLTrackingEnabled() bool {
+	if p.StripURLTracking == nil {
+		return true
+	}
+	return *p.StripURLTracking
+}
+
+// CollapseWhitespaceEnabled returns the effective collapse_whitespace setting.
+// Defaults to true when the field is unset — HTML→text conversion routinely
+// produces runs of empty lines and double-spaces that crowd out real content
+// under the max_input_chars cap.
+func (p PreprocessConfig) CollapseWhitespaceEnabled() bool {
+	if p.CollapseWhitespace == nil {
+		return true
+	}
+	return *p.CollapseWhitespace
+}
+
+// Fingerprint returns a stable, debuggable identifier for the effective
+// preprocessing policy. Format: "p<ver>-<flags>" where ver is the
+// preprocessVersion constant (bumped on regex/policy changes inside
+// internal/vector/embed/preprocess.go) and flags is a 0/1 string in
+// field-declaration order: strip_quotes, strip_signatures, strip_html,
+// strip_base64, strip_url_tracking, collapse_whitespace. New toggles
+// append to the right so adding one cannot collide with an existing
+// fingerprint by accident.
+func (p PreprocessConfig) Fingerprint() string {
+	flags := []bool{
+		p.StripQuotesEnabled(),
+		p.StripSignaturesEnabled(),
+		p.StripHTMLEnabled(),
+		p.StripBase64Enabled(),
+		p.StripURLTrackingEnabled(),
+		p.CollapseWhitespaceEnabled(),
+	}
+	var b strings.Builder
+	b.Grow(len("p999-") + len(flags))
+	fmt.Fprintf(&b, "p%d-", preprocessVersion)
+	for _, on := range flags {
+		if on {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
+	}
+	return b.String()
 }
 
 // SearchConfig controls hybrid-search ranking and result limits.
@@ -104,10 +193,33 @@ type EmbedScheduleConfig struct {
 	RunAfterSync bool   `toml:"run_after_sync"` // trigger after each successful sync
 }
 
-// Fingerprint returns the "<model>:<dimension>" identifier used by the
-// index-generation check (§6.7 of the spec).
+// Fingerprint returns the "<model>:<dimension>" identifier for the
+// embedding endpoint half of the policy (§6.7 of the spec). Use
+// Config.GenerationFingerprint when storing or comparing index
+// generations — that variant also folds in the preprocessing policy so
+// flipping a strip_* toggle stales the index.
 func (e EmbeddingsConfig) Fingerprint() string {
 	return fmt.Sprintf("%s:%d", e.Model, e.Dimension)
+}
+
+// GenerationFingerprint returns the full identifier used to compare an
+// index generation against the configured policy. Format:
+// "<model>:<dimension>:<preprocess>:c<max_input_chars>". Every segment
+// is derived from the effective config, so changing the embedding
+// model/dimension, any preprocessing toggle, OR the truncation cap
+// produces a new fingerprint and the ResolveActiveForFingerprint check
+// forces a --full-rebuild rather than silently embedding new messages
+// under a policy different from the already-active vectors.
+//
+// max_input_chars is part of the policy because the embed worker
+// passes it straight into Preprocess() as the rune-bounded truncation
+// cap (see Worker.run); raising or lowering it changes the embedded
+// text for any message whose preprocessed form exceeds the previous
+// cap, so two cap values produce two different embedding spaces and
+// must not share one generation.
+func (c Config) GenerationFingerprint() string {
+	return fmt.Sprintf("%s:%s:c%d",
+		c.Embeddings.Fingerprint(), c.Preprocess.Fingerprint(), c.Embeddings.MaxInputChars)
 }
 
 // Validate returns a descriptive error if the config is unusable.

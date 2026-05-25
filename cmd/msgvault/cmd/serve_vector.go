@@ -72,8 +72,12 @@ func setupVectorFeatures(ctx context.Context, mainDB *sql.DB, mainPath string) (
 		MainDB:    mainDB,
 		Client:    client,
 		Preprocess: embed.PreprocessConfig{
-			StripQuotes:     cfg.Vector.Preprocess.StripQuotesEnabled(),
-			StripSignatures: cfg.Vector.Preprocess.StripSignaturesEnabled(),
+			StripQuotes:        cfg.Vector.Preprocess.StripQuotesEnabled(),
+			StripSignatures:    cfg.Vector.Preprocess.StripSignaturesEnabled(),
+			StripHTML:          cfg.Vector.Preprocess.StripHTMLEnabled(),
+			StripBase64:        cfg.Vector.Preprocess.StripBase64Enabled(),
+			StripURLTracking:   cfg.Vector.Preprocess.StripURLTrackingEnabled(),
+			CollapseWhitespace: cfg.Vector.Preprocess.CollapseWhitespaceEnabled(),
 		},
 		MaxInputChars:   cfg.Vector.Embeddings.MaxInputChars,
 		BatchSize:       cfg.Vector.Embeddings.BatchSize,
@@ -83,7 +87,7 @@ func setupVectorFeatures(ctx context.Context, mainDB *sql.DB, mainPath string) (
 	})
 
 	engine := hybrid.NewEngine(backend, mainDB, client, hybrid.Config{
-		ExpectedFingerprint: cfg.Vector.Embeddings.Fingerprint(),
+		ExpectedFingerprint: cfg.Vector.GenerationFingerprint(),
 		RRFK:                cfg.Vector.Search.RRFK,
 		KPerSignal:          cfg.Vector.Search.KPerSignal,
 		SubjectBoost:        cfg.Vector.Search.SubjectBoost,

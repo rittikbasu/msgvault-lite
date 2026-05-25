@@ -17,7 +17,7 @@ LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 # - sqlite_vec: enable the sqlite-vec extension for vector search
 BUILD_TAGS := fts5 sqlite_vec
 
-.PHONY: build build-release install clean test test-v fmt lint lint-ci tidy shootout run-shootout install-hooks bench help
+.PHONY: build build-release install clean test test-v test-pg fmt lint lint-ci tidy shootout run-shootout install-hooks bench help
 
 # Build the binary (debug)
 build:
@@ -59,14 +59,15 @@ test-v:
 	go test -tags "$(BUILD_TAGS)" -v ./...
 
 # Run tests against PostgreSQL (set MSGVAULT_TEST_DB first).
-# This is scaffolded for the future functional backend; see docs/PG_STATUS.md.
 # Example: MSGVAULT_TEST_DB=postgres://user:pass@localhost:5432/db make test-pg
+#
+# CI runs the same target under .github/workflows/ci.yml's test-postgres job.
+# See docs/PG_STATUS.md for the supported feature surface.
 test-pg:
 	@if [ -z "$$MSGVAULT_TEST_DB" ]; then \
 		echo "MSGVAULT_TEST_DB must be set, e.g., postgres://user:pass@localhost:5432/db" >&2; \
 		exit 1; \
 	fi
-	@echo "PostgreSQL backend is scaffold-only; this target is expected to fail until docs/PG_STATUS.md blockers are resolved." >&2
 	go test -tags fts5 ./...
 
 # Format code

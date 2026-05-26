@@ -1191,6 +1191,54 @@ func (s *Store) EnsureParticipantByPhone(phone, displayName, identifierType stri
 	return id, nil
 }
 
+func (s *Store) EnsureParticipantByIdentifier(identifierType, identifierValue, displayName string) (int64, error) {
+	identifierType = strings.TrimSpace(identifierType)
+	identifierValue = strings.TrimSpace(identifierValue)
+	if identifierType == "" {
+		return 0, fmt.Errorf("identifier type is required")
+	}
+	if identifierValue == "" {
+		return 0, fmt.Errorf("identifier value is required")
+	}
+
+	var participantID int64
+	err := s.db.QueryRow(`
+		SELECT participant_id FROM participant_identifiers
+		WHERE identifier_type = ? AND identifier_value = ?
+	`, identifierType, identifierValue).Scan(&participantID)
+	if err == nil {
+		if displayName != "" {
+			_, _ = s.db.Exec(`
+				UPDATE participants SET display_name = ?
+				WHERE id = ? AND (display_name IS NULL OR display_name = '')
+			`, displayName, participantID)
+		}
+		return participantID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, fmt.Errorf("lookup participant identifier: %w", err)
+	}
+
+	now := s.dialect.Now()
+	err = s.db.QueryRow(fmt.Sprintf(`
+		INSERT INTO participants (display_name, created_at, updated_at)
+		VALUES (?, %s, %s)
+		RETURNING id
+	`, now, now), displayName).Scan(&participantID)
+	if err != nil {
+		return 0, fmt.Errorf("insert participant: %w", err)
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO participant_identifiers (
+			participant_id, identifier_type, identifier_value, display_value, is_primary
+		) VALUES (?, ?, ?, ?, TRUE)
+	`, participantID, identifierType, identifierValue, identifierValue)
+	if err != nil {
+		return 0, fmt.Errorf("insert participant identifier: %w", err)
+	}
+	return participantID, nil
+}
+
 // UpdateParticipantDisplayNameByPhone updates the display_name for an existing
 // participant identified by phone number. Only updates if display_name is currently
 // empty. Returns true if a participant was found and updated, false if not found

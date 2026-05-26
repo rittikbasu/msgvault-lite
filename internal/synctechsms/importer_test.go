@@ -1,0 +1,192 @@
+package synctechsms
+
+import (
+	"path/filepath"
+	"testing"
+
+	"go.kenn.io/msgvault/internal/store"
+	"go.kenn.io/msgvault/internal/testutil/storetest"
+)
+
+func TestImporterImportsSMSMMSCallsAndIsIdempotent(t *testing.T) {
+	f := storetest.New(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "messages.xml"), `<smses count="2">
+  <sms address="+15551234567" date="1717214400000" type="1" body="hello from sms" read="1" status="-1" contact_name="Alice" />
+  <mms date="1717214460000" msg_box="2" read="1" m_id="mms-1" sub="null">
+    <parts>
+      <part seq="0" ct="text/plain" text="mms text" />
+      <part seq="1" ct="image/png" cl="image.png" data="aGVsbG8=" />
+    </parts>
+    <addrs>
+      <addr address="+15550000001" type="137" charset="106" />
+      <addr address="+15551234567" type="151" charset="106" />
+    </addrs>
+  </mms>
+</smses>`)
+	writeFile(t, filepath.Join(dir, "calls.xml"), `<calls count="1">
+  <call number="+15551234567" duration="42" date="1717218000000" type="3" presentation="1" contact_name="Alice" />
+</calls>`)
+
+	imp := NewImporter(f.Store, ImportOptions{
+		OwnerPhone:         "+15550000001",
+		AttachmentsDir:     filepath.Join(dir, "attachments"),
+		IncludeSMS:         true,
+		IncludeMMS:         true,
+		IncludeCalls:       true,
+		IncludeAttachments: true,
+	})
+	summary, err := imp.ImportPath(dir)
+	if err != nil {
+		t.Fatalf("ImportPath: %v", err)
+	}
+	if summary.SMSImported != 1 || summary.MMSImported != 1 || summary.CallsImported != 1 || summary.AttachmentsImported != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	// SMS and MMS with the same other party share one conversation; calls
+	// stay on a separate thread.
+	assertConversationCount(t, f.Store, 2)
+	// The MMS parent message must record attachment metadata so the UI
+	// shows an attachment badge and attachment-only filters match.
+	assertMMSHasAttachmentMetadata(t, f.Store, 1)
+	writeFile(t, filepath.Join(dir, "messages-copy.xml"), `<smses count="1">
+  <sms address="+15551234567" date="1717214400000" type="1" body="hello from sms" read="1" status="-1" contact_name="Alice" />
+</smses>`)
+	summary, err = imp.ImportPath(dir)
+	if err != nil {
+		t.Fatalf("ImportPath second: %v", err)
+	}
+	assertMessageCount(t, f.Store, 3)
+	assertRawFormats(t, f.Store, RawFormat, 3)
+}
+
+func TestImporterRejectsMissingOwnerPhone(t *testing.T) {
+	f := storetest.New(t)
+	imp := NewImporter(f.Store, ImportOptions{IncludeSMS: true})
+	_, err := imp.ImportPath(t.TempDir())
+	if err == nil {
+		t.Fatal("ImportPath returned nil error")
+	}
+}
+
+func TestImporterImportsCallWithBlankNumber(t *testing.T) {
+	f := storetest.New(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "calls.xml"), `<calls count="1">
+  <call number="" duration="0" date="1775245887101" type="5" presentation="3" contact_name="(Unknown)" />
+</calls>`)
+
+	imp := NewImporter(f.Store, ImportOptions{
+		OwnerPhone:   "+15550000001",
+		IncludeCalls: true,
+	})
+	summary, err := imp.ImportPath(dir)
+	if err != nil {
+		t.Fatalf("ImportPath: %v", err)
+	}
+	if summary.CallsImported != 1 {
+		t.Fatalf("CallsImported = %d, want 1", summary.CallsImported)
+	}
+	assertMessageCount(t, f.Store, 1)
+}
+
+// TestImporterMarksDraftsAsFromMe guards against regressing the
+// draft-handling fix. SMSTypeDraft and MMSBoxDraft are owner-authored
+// messages; treating them as incoming hides them on the wrong side of
+// the conversation in TUI/API renderings of is_from_me.
+func TestImporterMarksDraftsAsFromMe(t *testing.T) {
+	f := storetest.New(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "messages.xml"), `<smses count="2">
+  <sms address="+15551234567" date="1717214400000" type="3" body="draft sms reply" read="1" status="-1" contact_name="Alice" />
+  <mms date="1717214460000" msg_box="3" read="1" m_id="mms-draft" sub="null">
+    <parts>
+      <part seq="0" ct="text/plain" text="draft mms reply" />
+    </parts>
+    <addrs>
+      <addr address="+15550000001" type="137" charset="106" />
+      <addr address="+15551234567" type="151" charset="106" />
+    </addrs>
+  </mms>
+</smses>`)
+
+	imp := NewImporter(f.Store, ImportOptions{
+		OwnerPhone: "+15550000001",
+		IncludeSMS: true,
+		IncludeMMS: true,
+	})
+	if _, err := imp.ImportPath(dir); err != nil {
+		t.Fatalf("ImportPath: %v", err)
+	}
+
+	rows, err := f.Store.DB().Query(`SELECT source_message_id, is_from_me FROM messages WHERE message_type IN ('sms', 'mms')`)
+	if err != nil {
+		t.Fatalf("query messages: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	got := map[string]bool{}
+	for rows.Next() {
+		var srcID string
+		var fromMe bool
+		if err := rows.Scan(&srcID, &fromMe); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[srcID] = fromMe
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2: %#v", len(got), got)
+	}
+	for srcID, fromMe := range got {
+		if !fromMe {
+			t.Errorf("%s is_from_me = false, want true (draft)", srcID)
+		}
+	}
+}
+
+func assertMessageCount(t *testing.T, st *store.Store, want int) {
+	t.Helper()
+	var got int
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&got); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if got != want {
+		t.Fatalf("message count = %d, want %d", got, want)
+	}
+}
+
+func assertRawFormats(t *testing.T, st *store.Store, format string, want int) {
+	t.Helper()
+	var got int
+	if err := st.DB().QueryRow(st.Rebind(`SELECT COUNT(*) FROM message_raw WHERE raw_format = ?`), format).Scan(&got); err != nil {
+		t.Fatalf("count raw formats: %v", err)
+	}
+	if got != want {
+		t.Fatalf("raw format count = %d, want %d", got, want)
+	}
+}
+
+func assertConversationCount(t *testing.T, st *store.Store, want int) {
+	t.Helper()
+	var got int
+	// Filter to conversations created by this importer; the shared store
+	// fixture seeds a default-thread row that is unrelated.
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM conversations WHERE source_conversation_id LIKE 'text:%' OR source_conversation_id LIKE 'calls:%'`).Scan(&got); err != nil {
+		t.Fatalf("count conversations: %v", err)
+	}
+	if got != want {
+		t.Fatalf("conversation count = %d, want %d", got, want)
+	}
+}
+
+func assertMMSHasAttachmentMetadata(t *testing.T, st *store.Store, wantCount int) {
+	t.Helper()
+	var hasAttachments bool
+	var count int
+	err := st.DB().QueryRow(`SELECT has_attachments, attachment_count FROM messages WHERE message_type = 'mms'`).Scan(&hasAttachments, &count)
+	if err != nil {
+		t.Fatalf("read mms attachment metadata: %v", err)
+	}
+	if !hasAttachments || count != wantCount {
+		t.Fatalf("mms metadata: has_attachments=%v count=%d, want true/%d", hasAttachments, count, wantCount)
+	}
+}

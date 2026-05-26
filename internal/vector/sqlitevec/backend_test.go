@@ -463,7 +463,9 @@ func TestBackend_Upsert_WritesEmbeddingAndVector(t *testing.T) {
 	}
 
 	if err := b.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM vectors_vec_d768 WHERE generation_id = ? AND message_id = 1`, gid).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM vectors_vec_d768 v
+		   JOIN embeddings e ON e.embedding_id = v.embedding_id
+		  WHERE v.generation_id = ? AND e.message_id = 1`, gid).Scan(&n); err != nil {
 		t.Fatalf("count vectors_vec_d768: %v", err)
 	}
 	if n != 1 {
@@ -584,6 +586,116 @@ func TestBackend_Upsert_MultiChunkAndTruncated(t *testing.T) {
 	}
 }
 
+// TestBackend_Upsert_MultiChunkMessage exercises the new
+// per-chunk-row layout: one upsert with two chunks for the same
+// message id must produce two embeddings rows (with chunk_index 0
+// and 1) and two vec0 rows, joined back through embedding_id.
+func TestBackend_Upsert_MultiChunkMessage(t *testing.T) {
+	b, ctx := newBackendForTest(t)
+	gid, err := b.CreateGeneration(ctx, "m", 768, "")
+	if err != nil {
+		t.Fatalf("CreateGeneration: %v", err)
+	}
+	v0 := make([]float32, 768)
+	v1 := make([]float32, 768)
+	for i := range v0 {
+		v0[i] = 0.25
+		v1[i] = 0.75
+	}
+	if err := b.Upsert(ctx, gid, []vector.Chunk{
+		{MessageID: 7, ChunkIndex: 0, Vector: v0, SourceCharLen: 100,
+			ChunkCharStart: 0, ChunkCharEnd: 100},
+		{MessageID: 7, ChunkIndex: 1, Vector: v1, SourceCharLen: 90,
+			ChunkCharStart: 80, ChunkCharEnd: 170},
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	var n int
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM embeddings WHERE generation_id = ? AND message_id = 7`, gid).Scan(&n); err != nil {
+		t.Fatalf("count embeddings: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("embeddings rows = %d, want 2", n)
+	}
+	// Each chunk_index appears exactly once.
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT chunk_index) FROM embeddings WHERE generation_id = ? AND message_id = 7`, gid).Scan(&n); err != nil {
+		t.Fatalf("count distinct chunk_index: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("distinct chunk_index = %d, want 2", n)
+	}
+	// vec0 has two rows, joined back through embedding_id.
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM vectors_vec_d768 v
+		   JOIN embeddings e ON e.embedding_id = v.embedding_id
+		  WHERE v.generation_id = ? AND e.message_id = 7`, gid).Scan(&n); err != nil {
+		t.Fatalf("count vectors: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("vec rows = %d, want 2", n)
+	}
+	// message_count counts distinct messages, not chunks: a two-chunk
+	// message contributes exactly one.
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT message_count FROM index_generations WHERE id = ?`, gid).Scan(&n); err != nil {
+		t.Fatalf("read message_count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("message_count = %d, want 1 (one distinct message)", n)
+	}
+}
+
+// TestBackend_Upsert_ReplaceFewerChunks confirms idempotency when the
+// chunk fan-out shrinks across upserts: re-upserting a message with
+// only chunk 0 must remove the chunk 1 left from a previous call.
+// Half-replace would leave an orphan row pointing at stale text.
+func TestBackend_Upsert_ReplaceFewerChunks(t *testing.T) {
+	b, ctx := newBackendForTest(t)
+	gid, err := b.CreateGeneration(ctx, "m", 768, "")
+	if err != nil {
+		t.Fatalf("CreateGeneration: %v", err)
+	}
+	v0 := make([]float32, 768)
+	v1 := make([]float32, 768)
+	for i := range v0 {
+		v0[i] = 0.1
+		v1[i] = 0.9
+	}
+	// First upsert: two chunks.
+	if err := b.Upsert(ctx, gid, []vector.Chunk{
+		{MessageID: 5, ChunkIndex: 0, Vector: v0, SourceCharLen: 100},
+		{MessageID: 5, ChunkIndex: 1, Vector: v1, SourceCharLen: 90},
+	}); err != nil {
+		t.Fatalf("first Upsert: %v", err)
+	}
+	// Second upsert: only chunk 0. Idempotent replace should also
+	// vacate the stale chunk 1 row.
+	if err := b.Upsert(ctx, gid, []vector.Chunk{
+		{MessageID: 5, ChunkIndex: 0, Vector: v0, SourceCharLen: 999},
+	}); err != nil {
+		t.Fatalf("second Upsert: %v", err)
+	}
+	var n int
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM embeddings WHERE generation_id = ? AND message_id = 5`, gid).Scan(&n); err != nil {
+		t.Fatalf("count embeddings: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("embeddings rows = %d, want 1 (chunk 1 should be vacated)", n)
+	}
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM vectors_vec_d768 v
+		   JOIN embeddings e ON e.embedding_id = v.embedding_id
+		  WHERE v.generation_id = ? AND e.message_id = 5`, gid).Scan(&n); err != nil {
+		t.Fatalf("count vectors: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("vec rows = %d, want 1 (chunk 1 vec should be vacated)", n)
+	}
+}
+
 func TestBackend_Upsert_ReplacesExisting(t *testing.T) {
 	b, ctx := newBackendForTest(t)
 	gid, err := b.CreateGeneration(ctx, "m", 768, "")
@@ -626,7 +738,9 @@ func TestBackend_Upsert_ReplacesExisting(t *testing.T) {
 	}
 
 	if err := b.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM vectors_vec_d768 WHERE generation_id = ? AND message_id = 1`, gid).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM vectors_vec_d768 v
+		   JOIN embeddings e ON e.embedding_id = v.embedding_id
+		  WHERE v.generation_id = ? AND e.message_id = 1`, gid).Scan(&n); err != nil {
 		t.Fatalf("count vectors_vec_d768: %v", err)
 	}
 	if n != 1 {
@@ -1415,7 +1529,7 @@ func TestBackend_Delete_RemovesFromAllTables(t *testing.T) {
 		t.Errorf("embeddings remaining: %d", n)
 	}
 	if err := b.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM vectors_vec_d768 WHERE message_id = 1`).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM vectors_vec_d768`).Scan(&n); err != nil {
 		t.Fatalf("count vectors: %v", err)
 	}
 	if n != 0 {
@@ -1491,6 +1605,57 @@ func TestBackend_Stats_AggregateAcrossGenerations(t *testing.T) {
 	}
 	if s.EmbeddingCount != 1 {
 		t.Errorf("aggregate EmbeddingCount=%d want 1", s.EmbeddingCount)
+	}
+}
+
+// TestBackend_Stats_AggregateCountsPerGenerationDuplicates pins the
+// fix for the aggregate undercount: when one message exists in both
+// the active generation and an in-flight building generation, the
+// aggregate path should report two units of embedded work (one per
+// generation) rather than collapsing to one via DISTINCT message_id.
+func TestBackend_Stats_AggregateCountsPerGenerationDuplicates(t *testing.T) {
+	b, ctx := newBackendForTest(t)
+
+	// First generation: embed message 1, then activate so the next
+	// CreateGeneration produces a building gen alongside it instead of
+	// reusing the same row.
+	genA := seedAndEmbed(t, b, map[int64][]float32{1: unitVec(768, 0)})
+	if err := b.ActivateGeneration(ctx, genA); err != nil {
+		t.Fatalf("ActivateGeneration(genA): %v", err)
+	}
+
+	// Second generation: re-embed the same message 1, mirroring the
+	// "rebuild in progress" state where every message is dual-embedded
+	// across active + building.
+	genB, err := b.CreateGeneration(ctx, "m", 768, "fp-b")
+	if err != nil {
+		t.Fatalf("CreateGeneration(genB): %v", err)
+	}
+	if err := b.Upsert(ctx, genB, []vector.Chunk{
+		{MessageID: 1, Vector: unitVec(768, 1)},
+	}); err != nil {
+		t.Fatalf("Upsert into genB: %v", err)
+	}
+
+	s, err := b.Stats(ctx, vector.GenerationID(0))
+	if err != nil {
+		t.Fatalf("Stats(0): %v", err)
+	}
+	if s.EmbeddingCount != 2 {
+		t.Errorf("aggregate EmbeddingCount=%d want 2 (one (gen, msg) pair per generation)", s.EmbeddingCount)
+	}
+
+	// Per-generation counts remain semantically "distinct messages in
+	// this generation", so each gen still reports 1.
+	if sa, err := b.Stats(ctx, genA); err != nil {
+		t.Fatalf("Stats(genA): %v", err)
+	} else if sa.EmbeddingCount != 1 {
+		t.Errorf("genA EmbeddingCount=%d want 1", sa.EmbeddingCount)
+	}
+	if sb, err := b.Stats(ctx, genB); err != nil {
+		t.Fatalf("Stats(genB): %v", err)
+	} else if sb.EmbeddingCount != 1 {
+		t.Errorf("genB EmbeddingCount=%d want 1", sb.EmbeddingCount)
 	}
 }
 

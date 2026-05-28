@@ -3,24 +3,25 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"go.kenn.io/msgvault/internal/store"
 	"go.kenn.io/msgvault/internal/vector"
 	"go.kenn.io/msgvault/internal/vector/embed"
 	"go.kenn.io/msgvault/internal/vector/sqlitevec"
 )
 
-func runEmbed(ctx context.Context) error {
+func runEmbed(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+	errOut := cmd.ErrOrStderr()
 	s, err := store.Open(cfg.DatabaseDSN())
 	if err != nil {
 		return fmt.Errorf("open main db: %w", err)
@@ -53,9 +54,9 @@ func runEmbed(ctx context.Context) error {
 		Fingerprint: cfg.Vector.GenerationFingerprint(),
 		Confirm: func() bool {
 			return embedYes ||
-				confirmEmbed("Start a full rebuild? This builds a new generation and atomically swaps it in when complete. ")
+				confirmEmbed(cmd, "Start a full rebuild? This builds a new generation and atomically swaps it in when complete. ")
 		},
-		Stderr: os.Stderr,
+		Stderr: errOut,
 	})
 	if err != nil {
 		return err
@@ -92,20 +93,20 @@ func runEmbed(ctx context.Context) error {
 		EmbedTimeout:    cfg.Vector.Embeddings.Timeout,
 		EmbedMaxRetries: cfg.Vector.Embeddings.MaxRetries,
 		TotalPending:    totalPending,
-		Progress:        newProgressPrinter(os.Stderr, totalPending, cfg.Vector.Embeddings.ETAWindow),
+		Progress:        newProgressPrinter(errOut, totalPending, cfg.Vector.Embeddings.ETAWindow),
 	})
 
 	if n, err := worker.ReclaimStale(ctx); err != nil {
 		return fmt.Errorf("reclaim stale: %w", err)
 	} else if n > 0 {
-		fmt.Fprintf(os.Stderr, "Reclaimed %d stale claims.\n", n)
+		fmt.Fprintf(errOut, "Reclaimed %d stale claims.\n", n)
 	}
 
 	res, err := worker.RunOnce(ctx, gen)
 	if err != nil {
 		return fmt.Errorf("embed run: %w", err)
 	}
-	fmt.Printf("Claimed: %d, succeeded: %d, failed: %d, truncated: %d\n",
+	fmt.Fprintf(out, "Claimed: %d, succeeded: %d, failed: %d, truncated: %d\n",
 		res.Claimed, res.Succeeded, res.Failed, res.Truncated)
 
 	// Activation is a function of the generation's final state, not
@@ -121,10 +122,10 @@ func runEmbed(ctx context.Context) error {
 			if err := backend.ActivateGeneration(ctx, gen); err != nil {
 				return fmt.Errorf("activate generation: %w", err)
 			}
-			fmt.Printf("Generation %d activated.\n", gen)
+			fmt.Fprintf(out, "Generation %d activated.\n", gen)
 		} else {
-			fmt.Fprintf(os.Stderr,
-				"Generation %d still has %d pending rows; run `msgvault build-embeddings` again to finish, then it will activate automatically.\n",
+			fmt.Fprintf(errOut,
+				"Generation %d still has %d pending rows; run `msgvault embeddings resume` again to finish, then it will activate automatically.\n",
 				gen, remaining)
 		}
 	}
@@ -142,7 +143,7 @@ type embedGenerationOpts struct {
 	// Confirm is only called when FullRebuild is true. Returns
 	// true if the user agreed to proceed.
 	Confirm func() bool
-	Stderr  *os.File
+	Stderr  io.Writer
 }
 
 // pickEmbedGeneration resolves which generation this embed run
@@ -187,7 +188,7 @@ func pickEmbedGeneration(ctx context.Context, backend vector.Backend, opts embed
 	//
 	//  1. A matching in-flight rebuild gets drained even if an
 	//     (older / stale) active generation also exists — otherwise
-	//     `msgvault build-embeddings` would top up the active index forever and
+	//     `msgvault embeddings build` would top up the active index forever and
 	//     leave the new build stranded in `building`.
 	//
 	//  2. A mismatched in-flight rebuild is rejected immediately,
@@ -334,16 +335,4 @@ func formatETA(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%ds", s)
 	}
-}
-
-// confirmEmbed reads a y/N answer from stdin. Default is no.
-func confirmEmbed(prompt string) bool {
-	fmt.Fprint(os.Stderr, prompt+"[y/N]: ")
-	r := bufio.NewReader(os.Stdin)
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return false
-	}
-	line = strings.TrimSpace(strings.ToLower(line))
-	return line == "y" || line == "yes"
 }

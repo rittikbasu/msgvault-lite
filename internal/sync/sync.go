@@ -242,7 +242,12 @@ func (s *Syncer) processBatch(ctx context.Context, sourceID int64, listResp *gma
 		}
 
 		// Hook vector-search enqueue after the batch-insert point.
-		// Non-fatal on failure: missed IDs get picked up by full-rebuild.
+		// A failed enqueue is non-fatal on both backends: the message
+		// rows are already persisted, and any IDs missed by a failed
+		// enqueue are recovered by a full vector rebuild
+		// (`msgvault embed --full-rebuild`), which re-seeds every live
+		// message (both pgvector and sqlitevec provide this path). So we
+		// warn and continue rather than abort the sync.
 		if s.embedEnqueuer != nil && len(insertedIDs) > 0 {
 			if err := s.embedEnqueuer.EnqueueMessages(ctx, insertedIDs); err != nil {
 				s.logger.Warn("vector enqueue failed", "ids", len(insertedIDs), "error", err)

@@ -2,8 +2,10 @@ package query
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -570,6 +572,128 @@ func TestDuckDBEngine_ListMessages_SenderNameFilter(t *testing.T) {
 
 	// Alice sent messages 1, 2, 3
 	assertpkg.Len(t, results, 3, "expected 3 messages from Alice")
+}
+
+// TestDuckDBEngine_SenderEmailAndName_SameFromRow asserts the analytics
+// (DuckDB-over-Parquet) builder binds a combined Sender (email) + SenderName
+// filter to the SAME from-row, matching the SQLite store engine. The message
+// has two authors: the queried email lives on Author A's from-row and the
+// queried name on Author B's — a cross-row match must NOT match, while the
+// same-row case still does. Covers both buildFilterConditions (ListMessages)
+// and GetGmailIDsByFilter.
+func TestDuckDBEngine_SenderEmailAndName_SameFromRow(t *testing.T) {
+	assert := assertpkg.New(t)
+	require := requirepkg.New(t)
+	ctx := context.Background()
+
+	b := NewTestDataBuilder(t)
+	b.AddSource("test@gmail.com")
+	authorA := b.AddParticipant("author-a@example.com", "example.com", "Author A")
+	authorB := b.AddParticipant("author-b@example.com", "example.com", "Author B")
+	msg := b.AddMessage(MessageOpt{Subject: "Two Authors", SentAt: makeDate(6, 10), SizeEstimate: 1000})
+	b.AddFrom(msg, authorA, "Author A")
+	b.AddFrom(msg, authorB, "Author B")
+	b.SetEmptyAttachments()
+	engine := b.BuildEngine()
+
+	gmailID := fmt.Sprintf("msg%d", msg)
+
+	// buildFilterConditions path (ListMessages).
+	crossRow, err := engine.ListMessages(ctx, MessageFilter{
+		Sender:     "author-a@example.com",
+		SenderName: "Author B",
+	})
+	require.NoError(err, "ListMessages cross-row")
+	for _, m := range crossRow {
+		assert.NotEqual("Two Authors", m.Subject,
+			"cross-row sender email+name must not match a multi-author message")
+	}
+
+	sameRow, err := engine.ListMessages(ctx, MessageFilter{
+		Sender:     "author-a@example.com",
+		SenderName: "Author A",
+	})
+	require.NoError(err, "ListMessages same-row")
+	assert.True(slices.ContainsFunc(sameRow, func(m MessageSummary) bool { return m.Subject == "Two Authors" }),
+		"same-row sender email+name must still match")
+
+	// GetGmailIDsByFilter path.
+	crossIDs, err := engine.GetGmailIDsByFilter(ctx, MessageFilter{
+		Sender:     "author-a@example.com",
+		SenderName: "Author B",
+	})
+	require.NoError(err, "GetGmailIDsByFilter cross-row")
+	assert.NotContains(crossIDs, gmailID,
+		"cross-row sender email+name must not match in GetGmailIDsByFilter")
+
+	sameIDs, err := engine.GetGmailIDsByFilter(ctx, MessageFilter{
+		Sender:     "author-a@example.com",
+		SenderName: "Author A",
+	})
+	require.NoError(err, "GetGmailIDsByFilter same-row")
+	assert.Contains(sameIDs, gmailID,
+		"same-row sender email+name must still match in GetGmailIDsByFilter")
+}
+
+// TestDuckDBEngine_RecipientEmailAndName_SameToRow asserts the analytics
+// (DuckDB-over-Parquet) builder binds a combined Recipient (email) +
+// RecipientName filter to the SAME to/cc/bcc row, matching the SQLite store
+// engine. The message has two recipients: the queried email lives on Recip A's
+// to-row and the queried name on Recip B's — a cross-row match must NOT match,
+// while the same-row case still does. Covers both buildFilterConditions
+// (ListMessages) and GetGmailIDsByFilter.
+func TestDuckDBEngine_RecipientEmailAndName_SameToRow(t *testing.T) {
+	assert := assertpkg.New(t)
+	require := requirepkg.New(t)
+	ctx := context.Background()
+
+	b := NewTestDataBuilder(t)
+	b.AddSource("test@gmail.com")
+	recipA := b.AddParticipant("recip-a@example.com", "example.com", "Recip A")
+	recipB := b.AddParticipant("recip-b@example.com", "example.com", "Recip B")
+	msg := b.AddMessage(MessageOpt{Subject: "Two Recipients", SentAt: makeDate(6, 10), SizeEstimate: 1000})
+	b.AddTo(msg, recipA, "Recip A")
+	b.AddTo(msg, recipB, "Recip B")
+	b.SetEmptyAttachments()
+	engine := b.BuildEngine()
+
+	gmailID := fmt.Sprintf("msg%d", msg)
+
+	// buildFilterConditions path (ListMessages).
+	crossRow, err := engine.ListMessages(ctx, MessageFilter{
+		Recipient:     "recip-a@example.com",
+		RecipientName: "Recip B",
+	})
+	require.NoError(err, "ListMessages cross-row")
+	for _, m := range crossRow {
+		assert.NotEqual("Two Recipients", m.Subject,
+			"cross-row recipient email+name must not match a multi-recipient message")
+	}
+
+	sameRow, err := engine.ListMessages(ctx, MessageFilter{
+		Recipient:     "recip-a@example.com",
+		RecipientName: "Recip A",
+	})
+	require.NoError(err, "ListMessages same-row")
+	assert.True(slices.ContainsFunc(sameRow, func(m MessageSummary) bool { return m.Subject == "Two Recipients" }),
+		"same-row recipient email+name must still match")
+
+	// GetGmailIDsByFilter path.
+	crossIDs, err := engine.GetGmailIDsByFilter(ctx, MessageFilter{
+		Recipient:     "recip-a@example.com",
+		RecipientName: "Recip B",
+	})
+	require.NoError(err, "GetGmailIDsByFilter cross-row")
+	assert.NotContains(crossIDs, gmailID,
+		"cross-row recipient email+name must not match in GetGmailIDsByFilter")
+
+	sameIDs, err := engine.GetGmailIDsByFilter(ctx, MessageFilter{
+		Recipient:     "recip-a@example.com",
+		RecipientName: "Recip A",
+	})
+	require.NoError(err, "GetGmailIDsByFilter same-row")
+	assert.Contains(sameIDs, gmailID,
+		"same-row recipient email+name must still match in GetGmailIDsByFilter")
 }
 
 func TestDuckDBEngine_GetGmailIDsByFilter_SenderName(t *testing.T) {

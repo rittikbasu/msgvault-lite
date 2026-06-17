@@ -178,8 +178,12 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 					summary.BytesDownloaded += int64(len(raw.Raw))
 				}
 
-				// Hook vector-search enqueue. Non-fatal on failure: missed
-				// IDs get picked up by full-rebuild.
+				// Hook vector-search enqueue. A failed enqueue is
+				// non-fatal on both backends: the message rows are
+				// already persisted, and any missed IDs are recovered by
+				// a full vector rebuild (`msgvault embed --full-rebuild`),
+				// which re-seeds every live message (pgvector and
+				// sqlitevec both provide this path).
 				if s.embedEnqueuer != nil && len(insertedIDs) > 0 {
 					if err := s.embedEnqueuer.EnqueueMessages(ctx, insertedIDs); err != nil {
 						s.logger.Warn("vector enqueue failed", "ids", len(insertedIDs), "error", err)
@@ -285,7 +289,12 @@ func (s *Syncer) handleLabelChange(ctx context.Context, sourceID int64, messageI
 			if err != nil {
 				return false, err
 			}
-			// Hook vector-search enqueue for the new message.
+			// Hook vector-search enqueue for the new message. A failed
+			// enqueue is non-fatal on both backends: the message row is
+			// already persisted, and any missed ID is recovered by a
+			// full vector rebuild (`msgvault embed --full-rebuild`),
+			// which re-seeds every live message (pgvector and sqlitevec
+			// both provide this path).
 			if s.embedEnqueuer != nil && insertedID > 0 {
 				if err := s.embedEnqueuer.EnqueueMessages(ctx, []int64{insertedID}); err != nil {
 					s.logger.Warn("vector enqueue failed", "ids", 1, "error", err)

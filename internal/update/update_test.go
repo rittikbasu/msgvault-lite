@@ -3,6 +3,7 @@ package update
 import (
 	"archive/tar"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -356,6 +357,67 @@ func TestUpdateURLsTargetCanonicalRepo(t *testing.T) {
 		"githubLatestReleaseURL must target the canonical repo, got %q", githubLatestReleaseURL)
 	assert.Truef(strings.HasPrefix(githubReleaseDownloadBase, wantPrefix),
 		"githubReleaseDownloadBase must target the canonical repo, got %q", githubReleaseDownloadBase)
+}
+
+type poisonDefaultTransport struct{}
+
+func (poisonDefaultTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected use of http.DefaultTransport")
+}
+
+func TestHTTPHelpersDoNotUseDefaultTransport(t *testing.T) {
+	require := requirepkg.New(t)
+	assert := assertpkg.New(t)
+	oldDefaultTransport := http.DefaultTransport
+	http.DefaultTransport = poisonDefaultTransport{}
+	t.Cleanup(func() {
+		http.DefaultTransport = oldDefaultTransport
+	})
+
+	const assetName = "msgvault_linux_amd64.tar.gz"
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/latest":
+				w.Header().Set("Location", "https://github.com/kenn-io/msgvault/releases/tag/v0.30.1")
+				w.WriteHeader(http.StatusFound)
+			case "/asset":
+				w.Header().Set("Content-Length", "7")
+				_, _ = w.Write([]byte("archive"))
+			case "/SHA256SUMS":
+				_, _ = fmt.Fprintf(w, "%s  %s\n", testHash64, assetName)
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	))
+	defer srv.Close()
+
+	tag, err := resolveLatestTag(srv.URL + "/latest")
+	require.NoError(err)
+	assert.Equal("v0.30.1", tag)
+
+	size, err := fetchContentLength(srv.URL + "/asset")
+	require.NoError(err)
+	assert.Equal(int64(7), size)
+
+	checksum, err := fetchChecksumFromFile(srv.URL+"/SHA256SUMS", assetName)
+	require.NoError(err)
+	assert.Equal(testHash64, checksum)
+
+	dest := filepath.Join(t.TempDir(), assetName)
+	gotChecksum, err := downloadFile(srv.URL+"/asset", dest, 7, nil)
+	require.NoError(err)
+	assert.NotEmpty(gotChecksum)
+}
+
+func TestDownloadHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
+	client := newUpdateDownloadHTTPClient()
+	defer client.CloseIdleConnections()
+
+	assertpkg.Zero(t, client.Timeout)
+	assertpkg.NotNil(t, client.Transport)
+	assertpkg.NotSame(t, http.DefaultTransport, client.Transport)
 }
 
 func TestResolveLatestTag(t *testing.T) {

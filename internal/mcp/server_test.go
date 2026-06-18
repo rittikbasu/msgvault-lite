@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/msgvault/internal/export"
 	"go.kenn.io/msgvault/internal/query"
 	"go.kenn.io/msgvault/internal/query/querytest"
+	"go.kenn.io/msgvault/internal/search"
 	"go.kenn.io/msgvault/internal/testutil"
 	"go.kenn.io/msgvault/internal/vector"
 	"go.kenn.io/msgvault/internal/vector/hybrid"
@@ -46,6 +47,22 @@ type attachmentMeta struct {
 	Filename string `json:"filename"`
 	MimeType string `json:"mime_type"`
 	Size     int64  `json:"size"`
+}
+
+type paginatedSearchMessages struct {
+	Data     []query.MessageSummary `json:"data"`
+	Total    int64                  `json:"total"`
+	Returned int                    `json:"returned"`
+	Offset   int                    `json:"offset"`
+	HasMore  bool                   `json:"has_more"`
+}
+
+type paginatedListMessages struct {
+	Data     []query.MessageSummary `json:"data"`
+	Total    int64                  `json:"total"`
+	Returned int                    `json:"returned"`
+	Offset   int                    `json:"offset"`
+	HasMore  bool                   `json:"has_more"`
 }
 
 // newTestHandlers creates a handlers instance with the given mock engine.
@@ -99,10 +116,10 @@ func TestSearchMessages(t *testing.T) {
 	h := newTestHandlers(eng)
 
 	t.Run("valid query", func(t *testing.T) {
-		msgs := runTool[[]query.MessageSummary](t, "search_messages", h.searchMessages, map[string]any{"query": "from:alice"})
-		requirepkg.Len(t, msgs, 1, "msgs")
-		assertpkg.Equal(t, "Hello", msgs[0].Subject, "subject")
-		assertpkg.Equal(t, "thread-abc", msgs[0].SourceConversationID, "SourceConversationID")
+		resp := runTool[paginatedSearchMessages](t, "search_messages", h.searchMessages, map[string]any{"query": "from:alice"})
+		requirepkg.Len(t, resp.Data, 1, "data")
+		assertpkg.Equal(t, "Hello", resp.Data[0].Subject, "subject")
+		assertpkg.Equal(t, "thread-abc", resp.Data[0].SourceConversationID, "SourceConversationID")
 	})
 
 	t.Run("missing query", func(t *testing.T) {
@@ -111,17 +128,65 @@ func TestSearchMessages(t *testing.T) {
 }
 
 func TestSearchFallbackToFTS(t *testing.T) {
+	require := requirepkg.New(t)
+	assert := assertpkg.New(t)
+
 	eng := &querytest.MockEngine{
 		SearchFastResults: nil, // fast returns nothing
-		SearchResults: []query.MessageSummary{
-			testutil.NewMessageSummary(2).WithSubject("Body match").WithFromEmail("bob@example.com").Build(),
+		SearchFunc: func(_ context.Context, _ *search.Query, limit, offset int) ([]query.MessageSummary, error) {
+			assert.Equal(2, limit, "FTS fallback should fetch one extra row for has_more")
+			assert.Equal(0, offset, "offset")
+			return []query.MessageSummary{
+				testutil.NewMessageSummary(2).WithSubject("Body match").WithFromEmail("bob@example.com").Build(),
+				testutil.NewMessageSummary(3).WithSubject("Second body match").Build(),
+			}, nil
 		},
 	}
 	h := newTestHandlers(eng)
 
-	msgs := runTool[[]query.MessageSummary](t, "search_messages", h.searchMessages, map[string]any{"query": "important meeting notes"})
-	requirepkg.Len(t, msgs, 1, "FTS fallback msgs")
-	assertpkg.Equal(t, int64(2), msgs[0].ID, "FTS fallback ID")
+	resp := runTool[paginatedSearchMessages](t, "search_messages", h.searchMessages, map[string]any{
+		"query": "important meeting notes",
+		"limit": float64(1),
+	})
+	require.Len(resp.Data, 1, "FTS fallback data")
+	assert.Equal(int64(2), resp.Data[0].ID, "FTS fallback ID")
+	assert.Equal(int64(totalCountUnknown), resp.Total, "FTS fallback total")
+	assert.Equal(1, resp.Returned, "returned")
+	assert.True(resp.HasMore, "has_more")
+}
+
+func TestSearchMessages_NonPositiveLimitUsesDefault(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		limit float64
+	}{
+		{name: "zero", limit: 0},
+		{name: "negative", limit: -5},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := assertpkg.New(t)
+			eng := &querytest.MockEngine{
+				SearchFastFunc: func(_ context.Context, _ *search.Query, _ query.MessageFilter, gotLimit, offset int) ([]query.MessageSummary, error) {
+					assert.Equal(defaultSearchLimit, gotLimit, "limit")
+					assert.Equal(0, offset, "offset")
+					return []query.MessageSummary{
+						testutil.NewMessageSummary(1).WithSubject("Hello").Build(),
+					}, nil
+				},
+				SearchFastCountFunc: func(context.Context, *search.Query, query.MessageFilter) (int64, error) {
+					return 1, nil
+				},
+			}
+			h := newTestHandlers(eng)
+
+			resp := runTool[paginatedSearchMessages](t, "search_messages", h.searchMessages, map[string]any{
+				"query": "hello",
+				"limit": tt.limit,
+			})
+			assert.Equal(1, resp.Returned, "returned")
+			assert.Equal(int64(1), resp.Total, "total")
+		})
+	}
 }
 
 func TestSearchMessages_HybridModeNotConfigured(t *testing.T) {
@@ -131,7 +196,7 @@ func TestSearchMessages_HybridModeNotConfigured(t *testing.T) {
 
 	r := runToolExpectError(t, "search_messages", h.searchMessages, map[string]any{
 		"query": "meeting notes",
-		"mode":  "hybrid",
+		"mode":  searchModeHybrid,
 	})
 	txt := resultText(t, r)
 	assertpkg.Contains(t, txt, "vector_not_enabled", "expected 'vector_not_enabled' error, got: %s")
@@ -172,7 +237,7 @@ func TestSearchMessages_HybridErrIndexBuilding(t *testing.T) {
 
 	r := runToolExpectError(t, "search_messages", h.searchMessages, map[string]any{
 		"query": "anything",
-		"mode":  "hybrid",
+		"mode":  searchModeHybrid,
 	})
 	txt := resultText(t, r)
 	assertpkg.Contains(t, txt, "index_building", "expected 'index_building' error, got: %s")
@@ -191,7 +256,7 @@ func TestSearchMessages_HybridErrNotEnabled(t *testing.T) {
 
 	r := runToolExpectError(t, "search_messages", h.searchMessages, map[string]any{
 		"query": "anything",
-		"mode":  "hybrid",
+		"mode":  searchModeHybrid,
 	})
 	txt := resultText(t, r)
 	assertpkg.Contains(t, txt, "vector_not_enabled", "expected 'vector_not_enabled' error, got: %s")
@@ -241,7 +306,7 @@ func TestSearchMessages_HybridFilterOnlyReturnsMissingFreeText(t *testing.T) {
 
 	r := runToolExpectError(t, "search_messages", h.searchMessages, map[string]any{
 		"query": "from:alice@example.com",
-		"mode":  "vector",
+		"mode":  searchModeVector,
 	})
 	txt := resultText(t, r)
 	assertpkg.Contains(t, txt, "missing_free_text", "expected 'missing_free_text' error, got: %s")
@@ -273,7 +338,7 @@ func TestSearchMessages_HybridPoolSaturatedAlwaysEmitted(t *testing.T) {
 
 	r := callToolDirect(t, "search_messages", h.searchMessages, map[string]any{
 		"query": "hello world",
-		"mode":  "vector",
+		"mode":  searchModeVector,
 	})
 	require.False(r.IsError, "unexpected error: %s", resultText(t, r))
 	var raw map[string]json.RawMessage
@@ -283,19 +348,229 @@ func TestSearchMessages_HybridPoolSaturatedAlwaysEmitted(t *testing.T) {
 	assertpkg.Equal(t, "false", string(val), "pool_saturated")
 }
 
-func TestSearchMessages_HybridModePaginationUnsupported(t *testing.T) {
-	// offset>0 must be rejected before any hybrid-engine lookup. The
-	// pagination check runs first, so a missing hybridEngine does not
-	// mask the pagination_unsupported error.
-	h := newTestHandlers(&querytest.MockEngine{})
+func TestSearchMessages_HybridModePagination(t *testing.T) {
+	const msgID = int64(77)
+	backend := &fakeBackend{
+		active: vector.Generation{
+			ID: 1, Model: "fake", Dimension: 4,
+			Fingerprint: "fake:4", State: vector.GenerationActive,
+		},
+		searchHits: []vector.Hit{
+			{MessageID: 10, Score: 0.9},
+			{MessageID: 20, Score: 0.8},
+			{MessageID: msgID, Score: 0.7},
+		},
+	}
+	engine := hybrid.NewEngine(backend, nil, realEmbedder{dim: 4}, hybrid.Config{
+		ExpectedFingerprint: "fake:4", RRFK: 60, KPerSignal: 10,
+	})
+	mockEng := &querytest.MockEngine{
+		Messages: map[int64]*query.MessageDetail{
+			10: testutil.NewMessageDetail(10).WithBodyText("first hit").BuildPtr(),
+			20: testutil.NewMessageDetail(20).WithBodyText("second hit").BuildPtr(),
+			77: testutil.NewMessageDetail(msgID).WithBodyText("third hit").BuildPtr(),
+		},
+	}
+	h := &handlers{
+		engine:       mockEng,
+		hybridEngine: engine,
+		backend:      backend,
+		vectorCfg:    vector.Config{},
+	}
+
+	type hybridPage struct {
+		Data []struct {
+			ID int64 `json:"id"`
+		} `json:"data"`
+		Offset   int   `json:"offset"`
+		Returned int   `json:"returned"`
+		Total    int64 `json:"total"`
+		HasMore  bool  `json:"has_more"`
+	}
+	resp := runTool[hybridPage](t, "search_messages", h.searchMessages, map[string]any{
+		"query":  "hit",
+		"mode":   searchModeVector,
+		"offset": float64(1),
+		"limit":  float64(1),
+	})
+	require := requirepkg.New(t)
+	assert := assertpkg.New(t)
+	require.Len(resp.Data, 1, "data")
+	assert.Equal(int64(20), resp.Data[0].ID, "second ranked hit")
+	assert.Equal(1, resp.Offset, "offset")
+	assert.Equal(int64(totalCountUnknown), resp.Total, "total")
+	assert.True(resp.HasMore, "has_more")
+}
+
+func TestSearchMessages_HybridPagination_NoUnreachableHasMore(t *testing.T) {
+	// Regression: offset=40&limit=20 with max_page_size_hybrid=50 fetches the
+	// last 10 hits in-window. Pool saturation must not set has_more=true when
+	// the next page (offset=60) exceeds the ranking window. total must stay -1
+	// because additional corpus matches may exist beyond the ranking window.
+	maxPage := 50
+	hits := make([]vector.Hit, maxPage)
+	msgs := make(map[int64]*query.MessageDetail, maxPage)
+	for i := range maxPage {
+		id := int64(i + 1)
+		hits[i] = vector.Hit{MessageID: id, Score: 1.0 - float64(i)*0.01}
+		msgs[id] = testutil.NewMessageDetail(id).WithBodyText("hit").BuildPtr()
+	}
+	backend := &fakeBackend{
+		active: vector.Generation{
+			ID: 1, Model: "fake", Dimension: 4,
+			Fingerprint: "fake:4", State: vector.GenerationActive,
+		},
+		searchHits: hits,
+	}
+	engine := hybrid.NewEngine(backend, nil, realEmbedder{dim: 4}, hybrid.Config{
+		ExpectedFingerprint: "fake:4", RRFK: 60, KPerSignal: 10,
+	})
+	h := &handlers{
+		engine:       &querytest.MockEngine{Messages: msgs},
+		hybridEngine: engine,
+		backend:      backend,
+		vectorCfg:    vector.Config{Search: vector.SearchConfig{MaxPageSizeHybrid: &maxPage}},
+	}
+
+	type hybridPage struct {
+		Data []struct {
+			ID int64 `json:"id"`
+		} `json:"data"`
+		Total   int64 `json:"total"`
+		HasMore bool  `json:"has_more"`
+	}
+	resp := runTool[hybridPage](t, "search_messages", h.searchMessages, map[string]any{
+		"query":  "hit",
+		"mode":   searchModeVector,
+		"offset": float64(40),
+		"limit":  float64(20),
+	})
+	require := requirepkg.New(t)
+	assert := assertpkg.New(t)
+	require.Len(resp.Data, 10, "data")
+	assert.Equal(int64(totalCountUnknown), resp.Total, "total")
+	assert.False(resp.HasMore, "has_more")
 
 	r := runToolExpectError(t, "search_messages", h.searchMessages, map[string]any{
-		"query":  "meeting notes",
-		"mode":   "vector",
-		"offset": float64(1),
+		"query":  "hit",
+		"mode":   searchModeVector,
+		"offset": float64(60),
+		"limit":  float64(20),
 	})
-	txt := resultText(t, r)
-	assertpkg.Contains(t, txt, "pagination_unsupported", "expected 'pagination_unsupported' error, got: %s")
+	assert.Contains(resultText(t, r), "pagination_limit")
+}
+
+func TestSearchMessages_HybridPagination_NoHasMoreAtMaxPageBoundary(t *testing.T) {
+	// Regression: offset=30&limit=20 with max_page_size_hybrid=50 fills the
+	// ranking window (requestedEnd=50). has_more must be false even when the
+	// pool is saturated — the next page (offset=50) is rejected.
+	const maxPage = 50
+	const hitCount = 50
+	hits := make([]vector.Hit, hitCount)
+	msgs := make(map[int64]*query.MessageDetail, hitCount)
+	for i := range hitCount {
+		id := int64(i + 1)
+		hits[i] = vector.Hit{MessageID: id, Score: 1.0 - float64(i)*0.01}
+		msgs[id] = testutil.NewMessageDetail(id).WithBodyText("hit").BuildPtr()
+	}
+	backend := &fakeBackend{
+		active: vector.Generation{
+			ID: 1, Model: "fake", Dimension: 4,
+			Fingerprint: "fake:4", State: vector.GenerationActive,
+		},
+		searchHits: hits,
+	}
+	engine := hybrid.NewEngine(backend, nil, realEmbedder{dim: 4}, hybrid.Config{
+		ExpectedFingerprint: "fake:4", RRFK: 60, KPerSignal: 10,
+	})
+	h := &handlers{
+		engine:       &querytest.MockEngine{Messages: msgs},
+		hybridEngine: engine,
+		backend:      backend,
+		vectorCfg:    vector.Config{Search: vector.SearchConfig{MaxPageSizeHybrid: new(maxPage)}},
+	}
+
+	type hybridPage struct {
+		Data []struct {
+			ID int64 `json:"id"`
+		} `json:"data"`
+		Total   int64 `json:"total"`
+		HasMore bool  `json:"has_more"`
+	}
+	resp := runTool[hybridPage](t, "search_messages", h.searchMessages, map[string]any{
+		"query":  "hit",
+		"mode":   searchModeVector,
+		"offset": float64(30),
+		"limit":  float64(20),
+	})
+	require := requirepkg.New(t)
+	assert := assertpkg.New(t)
+	require.Len(resp.Data, 20, "data")
+	assert.Equal(int64(totalCountUnknown), resp.Total, "total")
+	assert.False(resp.HasMore, "has_more")
+
+	r := runToolExpectError(t, "search_messages", h.searchMessages, map[string]any{
+		"query":  "hit",
+		"mode":   searchModeVector,
+		"offset": float64(50),
+		"limit":  float64(20),
+	})
+	assert.Contains(resultText(t, r), "pagination_limit")
+}
+
+func TestSearchMessages_HybridPagination_ProbeRowDetectsMore(t *testing.T) {
+	// Regression: hybrid must fetch offset+limit+1 rows so has_more is true
+	// when additional in-window fused results exist (not only when the pool
+	// is saturated past the ranking window).
+	const hitCount = 25
+	hits := make([]vector.Hit, hitCount)
+	msgs := make(map[int64]*query.MessageDetail, hitCount)
+	for i := range hitCount {
+		id := int64(i + 1)
+		hits[i] = vector.Hit{MessageID: id, Score: 1.0 - float64(i)*0.01}
+		msgs[id] = testutil.NewMessageDetail(id).WithBodyText("hit").BuildPtr()
+	}
+	backend := &fakeBackend{
+		active: vector.Generation{
+			ID: 1, Model: "fake", Dimension: 4,
+			Fingerprint: "fake:4", State: vector.GenerationActive,
+		},
+		searchHits: hits,
+	}
+	engine := hybrid.NewEngine(backend, nil, realEmbedder{dim: 4}, hybrid.Config{
+		ExpectedFingerprint: "fake:4", RRFK: 60, KPerSignal: 50,
+	})
+	h := &handlers{
+		engine:       &querytest.MockEngine{Messages: msgs},
+		hybridEngine: engine,
+		backend:      backend,
+		vectorCfg:    vector.Config{},
+	}
+
+	type hybridPage struct {
+		Data []struct {
+			ID int64 `json:"id"`
+		} `json:"data"`
+		HasMore bool `json:"has_more"`
+	}
+	resp := runTool[hybridPage](t, "search_messages", h.searchMessages, map[string]any{
+		"query": "hit",
+		"mode":  searchModeVector,
+		"limit": float64(20),
+	})
+	require := requirepkg.New(t)
+	assert := assertpkg.New(t)
+	require.Len(resp.Data, 20, "data")
+	assert.True(resp.HasMore, "has_more")
+
+	resp2 := runTool[hybridPage](t, "search_messages", h.searchMessages, map[string]any{
+		"query":  "hit",
+		"mode":   searchModeVector,
+		"offset": float64(20),
+		"limit":  float64(20),
+	})
+	require.Len(resp2.Data, 5, "data page 2")
+	assert.False(resp2.HasMore, "has_more page 2")
 }
 
 func TestSearchMessages_UnknownMode(t *testing.T) {
@@ -452,13 +727,14 @@ func TestListMessages(t *testing.T) {
 	h := newTestHandlers(eng)
 
 	t.Run("valid filters", func(t *testing.T) {
-		msgs := runTool[[]query.MessageSummary](t, "list_messages", h.listMessages, map[string]any{
+		resp := runTool[paginatedListMessages](t, "list_messages", h.listMessages, map[string]any{
 			"from":  "alice@example.com",
 			"after": "2024-01-01",
 			"limit": float64(10),
 		})
-		requirepkg.Len(t, msgs, 1, "msgs")
-		assertpkg.Equal(t, "thread-list", msgs[0].SourceConversationID, "SourceConversationID")
+		requirepkg.Len(t, resp.Data, 1, "data")
+		assertpkg.Equal(t, "thread-list", resp.Data[0].SourceConversationID, "SourceConversationID")
+		assertpkg.False(t, resp.HasMore, "has_more")
 	})
 
 	errorCases := []struct {
@@ -473,6 +749,27 @@ func TestListMessages(t *testing.T) {
 			runToolExpectError(t, "list_messages", h.listMessages, tt.args)
 		})
 	}
+}
+
+func TestListMessages_TotalUnknownWithoutCount(t *testing.T) {
+	assert := assertpkg.New(t)
+
+	eng := &querytest.MockEngine{
+		ListMessagesFunc: func(_ context.Context, filter query.MessageFilter) ([]query.MessageSummary, error) {
+			assert.Equal(defaultSearchLimit+1, filter.Pagination.Limit, "limit includes has_more probe")
+			assert.Equal(1000, filter.Pagination.Offset, "offset")
+			return nil, nil
+		},
+	}
+	h := newTestHandlers(eng)
+
+	resp := runTool[paginatedListMessages](t, "list_messages", h.listMessages, map[string]any{
+		"offset": float64(1000),
+	})
+	assert.Empty(resp.Data, "data")
+	assert.Equal(int64(totalCountUnknown), resp.Total, "total")
+	assert.Equal(0, resp.Returned, "returned")
+	assert.False(resp.HasMore, "has_more")
 }
 
 func TestAggregateInvalidDates(t *testing.T) {
@@ -937,11 +1234,11 @@ func TestAccountFilter(t *testing.T) {
 	h := newTestHandlers(eng)
 
 	t.Run("search with valid account", func(t *testing.T) {
-		msgs := runTool[[]query.MessageSummary](t, "search_messages", h.searchMessages, map[string]any{
+		resp := runTool[paginatedSearchMessages](t, "search_messages", h.searchMessages, map[string]any{
 			"query":   "test",
 			"account": "alice@gmail.com",
 		})
-		assertpkg.Len(t, msgs, 1, "msgs")
+		assertpkg.Len(t, resp.Data, 1, "data")
 	})
 
 	t.Run("search with invalid account", func(t *testing.T) {
@@ -954,10 +1251,10 @@ func TestAccountFilter(t *testing.T) {
 	})
 
 	t.Run("list with valid account", func(t *testing.T) {
-		msgs := runTool[[]query.MessageSummary](t, "list_messages", h.listMessages, map[string]any{
+		resp := runTool[paginatedListMessages](t, "list_messages", h.listMessages, map[string]any{
 			"account": "bob@gmail.com",
 		})
-		assertpkg.Len(t, msgs, 1, "msgs")
+		assertpkg.Len(t, resp.Data, 1, "data")
 	})
 
 	t.Run("list with invalid account", func(t *testing.T) {
@@ -987,11 +1284,11 @@ func TestAccountFilter(t *testing.T) {
 
 	t.Run("empty account means no filter", func(t *testing.T) {
 		// Empty string should not filter - return all results
-		msgs := runTool[[]query.MessageSummary](t, "search_messages", h.searchMessages, map[string]any{
+		resp := runTool[paginatedSearchMessages](t, "search_messages", h.searchMessages, map[string]any{
 			"query":   "test",
 			"account": "",
 		})
-		assertpkg.Len(t, msgs, 1, "msgs")
+		assertpkg.Len(t, resp.Data, 1, "data")
 	})
 }
 

@@ -975,12 +975,20 @@ func (g GmailIDsResponse) Validate() error {
 }
 
 type HealthResponse struct {
-	Status string        `json:"status" validate:"required"`
-	Vector *VectorHealth `json:"vector,omitempty"`
+	Operation *OperationHealth `json:"operation,omitempty"`
+	Status    string           `json:"status" validate:"required"`
+	Vector    *VectorHealth    `json:"vector,omitempty"`
 }
 
 func (h HealthResponse) Validate() error {
 	var errors runtime.ValidationErrors
+	if h.Operation != nil {
+		if v, ok := any(h.Operation).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Operation", err)
+			}
+		}
+	}
 	if err := typesValidator.Var(h.Status, "required"); err != nil {
 		errors = errors.Append("Status", err)
 	}
@@ -1274,6 +1282,12 @@ type MutationResult struct {
 
 func (m MutationResult) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(m))
+}
+
+type OperationHealth struct {
+	Busy      bool       `json:"busy"`
+	Label     *string    `json:"label,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 
 type PingInfo struct {

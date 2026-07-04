@@ -136,9 +136,19 @@ type VectorHealth struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// OperationHealth reports the archive operation currently holding the
+// daemon's operation gate. Public health only reports Busy; authenticated
+// health may include Label and StartedAt.
+type OperationHealth struct {
+	Busy      bool       `json:"busy"`
+	Label     string     `json:"label,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
 type HealthResponse struct {
-	Status string        `json:"status"`
-	Vector *VectorHealth `json:"vector,omitempty"`
+	Status    string           `json:"status"`
+	Vector    *VectorHealth    `json:"vector,omitempty"`
+	Operation *OperationHealth `json:"operation,omitempty"`
 }
 
 type MessageListResponse struct {

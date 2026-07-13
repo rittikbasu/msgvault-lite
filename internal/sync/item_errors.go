@@ -12,12 +12,14 @@ const (
 	syncItemPhaseFetch  = "fetch"
 	syncItemPhaseIngest = "ingest"
 	syncItemPhaseDelete = "delete"
+	syncItemPhaseLabel  = "label"
 
 	syncItemKindBatchFetchError = "batch_fetch_error"
 	syncItemKindFetchError      = "fetch_error"
 	syncItemKindGmailNotFound   = "gmail_not_found"
 	syncItemKindIngestError     = "ingest_error"
 	syncItemKindDeleteError     = "delete_error"
+	syncItemKindLabelError      = "label_error"
 )
 
 var errRawBatchMissing = errors.New("missing raw message in batch result")

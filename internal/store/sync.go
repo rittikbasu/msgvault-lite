@@ -374,6 +374,38 @@ func (s *Store) CompleteSync(syncID int64, finalHistoryID string) error {
 	return err
 }
 
+// CommitIncrementalSync atomically advances a source cursor and marks its sync
+// run complete. A failure in either update leaves both records unchanged.
+func (s *Store) CommitIncrementalSync(sourceID, syncID int64, finalHistoryID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin incremental sync commit: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := s.dialect.Now()
+	if _, err := tx.Exec(fmt.Sprintf(`
+		UPDATE sources
+		SET sync_cursor = ?, last_sync_at = %s, updated_at = %s
+		WHERE id = ?
+	`, now, now), finalHistoryID, sourceID); err != nil {
+		return fmt.Errorf("update source cursor: %w", err)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`
+		UPDATE sync_runs
+		SET status = 'completed',
+		    completed_at = %s,
+		    cursor_after = ?
+		WHERE id = ?
+	`, now), finalHistoryID, syncID); err != nil {
+		return fmt.Errorf("complete sync run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit incremental sync transaction: %w", err)
+	}
+	return nil
+}
+
 // FailSync marks a sync as failed with an error message.
 func (s *Store) FailSync(syncID int64, errMsg string) error {
 	_, err := s.db.Exec(fmt.Sprintf(`

@@ -67,7 +67,13 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 	// If history IDs match, nothing to do
 	if startHistoryID >= profile.HistoryID {
 		s.logger.Info("already up to date")
-		_ = s.store.CompleteSync(syncID, strconv.FormatUint(profile.HistoryID, 10))
+		if completeErr := s.store.CompleteSync(syncID, strconv.FormatUint(profile.HistoryID, 10)); completeErr != nil {
+			syncErr := fmt.Errorf("complete up-to-date sync: %w", completeErr)
+			if failErr := s.store.FailSync(syncID, syncErr.Error()); failErr != nil {
+				return nil, errors.Join(syncErr, fmt.Errorf("record sync failure: %w", failErr))
+			}
+			return nil, syncErr
+		}
 		summary.EndTime = time.Now()
 		summary.Duration = summary.EndTime.Sub(summary.StartTime)
 		summary.FinalHistoryID = profile.HistoryID
@@ -211,7 +217,11 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 		pageToken = historyResp.NextPageToken
 		checkpoint.PageToken = pageToken
 		if err := s.store.UpdateSyncCheckpoint(syncID, checkpoint); err != nil {
-			s.logger.Warn("failed to save checkpoint", "error", err)
+			syncErr := fmt.Errorf("save sync checkpoint: %w", err)
+			if failErr := s.store.FailSync(syncID, syncErr.Error()); failErr != nil {
+				return nil, errors.Join(syncErr, fmt.Errorf("record sync failure: %w", failErr))
+			}
+			return nil, syncErr
 		}
 
 		// No more pages
@@ -220,22 +230,24 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 		}
 	}
 
-	// Always advance the cursor so a single permanently-failing
-	// message doesn't block all future incremental syncs.
-	// Failed messages can be recovered via full sync.
 	historyIDStr := strconv.FormatUint(profile.HistoryID, 10)
 	if checkpoint.ErrorsCount > 0 {
-		s.logger.Warn("incremental sync completed with errors",
+		syncErr := fmt.Errorf("incremental sync failed for %d message(s); history cursor remains at %d", checkpoint.ErrorsCount, startHistoryID)
+		s.logger.Error("incremental sync failed with message errors",
 			"errors", checkpoint.ErrorsCount,
-			"history_id", historyIDStr)
+			"history_id", historyIDStr,
+			"retained_history_id", startHistoryID)
+		if failErr := s.store.FailSync(syncID, syncErr.Error()); failErr != nil {
+			return nil, errors.Join(syncErr, fmt.Errorf("record sync failure: %w", failErr))
+		}
+		return nil, syncErr
 	}
-	if err := s.store.UpdateSourceSyncCursor(source.ID, historyIDStr); err != nil {
-		s.logger.Warn("failed to update sync cursor", "error", err)
-	}
-
-	// Mark sync complete
-	if err := s.store.CompleteSync(syncID, historyIDStr); err != nil {
-		s.logger.Warn("failed to complete sync", "error", err)
+	if err := s.store.CommitIncrementalSync(source.ID, syncID, historyIDStr); err != nil {
+		syncErr := fmt.Errorf("commit incremental sync: %w", err)
+		if failErr := s.store.FailSync(syncID, syncErr.Error()); failErr != nil {
+			return nil, errors.Join(syncErr, fmt.Errorf("record sync failure: %w", failErr))
+		}
+		return nil, syncErr
 	}
 
 	// Build summary
@@ -262,6 +274,10 @@ func (s *Syncer) processLabelChanges(ctx context.Context, syncID, sourceID int64
 		}
 		updated, err := s.handleLabelChange(ctx, syncID, sourceID, item.Message.ID, item.Message.ThreadID, item.LabelIDs, labelMap, true, existingMap, checkpoint, summary)
 		if err != nil {
+			if _, exists := existingMap[item.Message.ID]; exists {
+				s.recordSyncItem(syncID, item.Message.ID, syncItemPhaseLabel, store.SyncRunItemStatusError, syncItemKindLabelError, err)
+				checkpoint.ErrorsCount++
+			}
 			s.logLabelChangeError("add", item.Message.ID, err)
 			continue
 		}
@@ -272,6 +288,10 @@ func (s *Syncer) processLabelChanges(ctx context.Context, syncID, sourceID int64
 	for _, item := range record.LabelsRemoved {
 		updated, err := s.handleLabelChange(ctx, syncID, sourceID, item.Message.ID, item.Message.ThreadID, item.LabelIDs, labelMap, false, existingMap, checkpoint, summary)
 		if err != nil {
+			if _, exists := existingMap[item.Message.ID]; exists {
+				s.recordSyncItem(syncID, item.Message.ID, syncItemPhaseLabel, store.SyncRunItemStatusError, syncItemKindLabelError, err)
+				checkpoint.ErrorsCount++
+			}
 			s.logLabelChangeError("remove", item.Message.ID, err)
 			continue
 		}

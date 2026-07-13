@@ -66,16 +66,18 @@ func backupProgressStageLabel(stage backup.ProgressStage) string {
 // the same auto/tty/plain approach CLIProgress (syncfull.go) already
 // established for sync-full, reusing its progressOutputMode type.
 type backupProgressRenderer struct {
-	mu         sync.Mutex
-	mode       progressOutputMode
-	out        io.Writer
-	stage      backup.ProgressStage
-	stageStart time.Time
-	lastRender time.Time
-	stageOpen  bool // true once the current stage has printed an in-place (non-final) TTY line
-	lastWidth  int  // rune width of the last in-place TTY line, for pad-clearing shorter redraws
-	lastEvent  backup.ProgressEvent
-	tickerStop chan struct{}
+	mu           sync.Mutex
+	mode         progressOutputMode
+	out          io.Writer
+	stage        backup.ProgressStage
+	stageStart   time.Time
+	lastRender   time.Time
+	stageOpen    bool // true once the current stage has printed an in-place (non-final) TTY line
+	lastWidth    int  // rune width of the last in-place TTY line, for pad-clearing shorter redraws
+	lastEvent    backup.ProgressEvent
+	tickerStop   chan struct{}
+	tickInterval time.Duration
+	elapsedTick  time.Duration
 }
 
 // backupProgressElapsedTick is how often the idle ticker re-renders an open
@@ -88,7 +90,12 @@ var backupProgressElapsedTick = time.Second
 // to os.Stdout) in mode. progressModeAuto detects the mode from out's own
 // terminal-ness the first time an event is handled.
 func newBackupProgressRenderer(out io.Writer, mode progressOutputMode) *backupProgressRenderer {
-	return &backupProgressRenderer{mode: mode, out: out}
+	return &backupProgressRenderer{
+		mode:         mode,
+		out:          out,
+		tickInterval: backupProgressTickInterval,
+		elapsedTick:  backupProgressElapsedTick,
+	}
 }
 
 func (r *backupProgressRenderer) writer() io.Writer {
@@ -135,7 +142,7 @@ func (r *backupProgressRenderer) handle(ev backup.ProgressEvent) {
 		// the last event that happened to render.
 		r.lastEvent = ev
 	}
-	if !ev.Final && time.Since(r.lastRender) < backupProgressTickInterval {
+	if !ev.Final && time.Since(r.lastRender) < r.tickInterval {
 		return
 	}
 	r.lastRender = time.Now()
@@ -212,7 +219,7 @@ func (r *backupProgressRenderer) startElapsedTickerLocked() {
 	stop := make(chan struct{})
 	r.tickerStop = stop
 	go func() {
-		ticker := time.NewTicker(backupProgressElapsedTick)
+		ticker := time.NewTicker(r.elapsedTick)
 		defer ticker.Stop()
 		for {
 			select {
@@ -220,7 +227,7 @@ func (r *backupProgressRenderer) startElapsedTickerLocked() {
 				return
 			case <-ticker.C:
 				r.mu.Lock()
-				if r.stageOpen && time.Since(r.lastRender) >= backupProgressTickInterval {
+				if r.stageOpen && time.Since(r.lastRender) >= r.tickInterval {
 					r.render(r.lastEvent)
 				}
 				r.mu.Unlock()

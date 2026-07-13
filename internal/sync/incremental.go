@@ -242,7 +242,7 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 		}
 		return nil, syncErr
 	}
-	if err := s.store.CommitIncrementalSync(source.ID, syncID, historyIDStr); err != nil {
+	if err := s.store.CommitSync(source.ID, syncID, historyIDStr); err != nil {
 		syncErr := fmt.Errorf("commit incremental sync: %w", err)
 		if failErr := s.store.FailSync(syncID, syncErr.Error()); failErr != nil {
 			return nil, errors.Join(syncErr, fmt.Errorf("record sync failure: %w", failErr))

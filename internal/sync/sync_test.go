@@ -43,6 +43,27 @@ func (b *batchErrorAPI) GetMessagesRawBatchWithErrors(_ context.Context, _ []str
 	return nil, errors.New("batch fetch unavailable")
 }
 
+type panicOnCompleteProgress struct {
+	gmail.NullProgress
+}
+
+func (panicOnCompleteProgress) OnComplete(*gmail.SyncSummary) {
+	panic("progress completion panic")
+}
+
+type supersedeOnProfileAPI struct {
+	*gmail.MockAPI
+	store    *store.Store
+	sourceID int64
+}
+
+func (a *supersedeOnProfileAPI) GetProfile(ctx context.Context) (*gmail.Profile, error) {
+	if _, err := a.store.StartSync(a.sourceID, "incremental"); err != nil {
+		return nil, fmt.Errorf("start superseding sync: %w", err)
+	}
+	return a.MockAPI.GetProfile(ctx)
+}
+
 func TestFullSync_PanicReturnsError(t *testing.T) {
 	env := newTestEnv(t)
 	seedMessages(env, 1, 12345, "msg1")
@@ -179,6 +200,145 @@ func TestIncrementalSyncCursorCommitFailureDoesNotReportSuccess(t *testing.T) {
 	assert.False(run.CursorAfter.Valid, "failed sync must not record a new cursor")
 }
 
+func TestIncrementalSyncCompletionFailureRollsBackCursor(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	source := env.CreateSourceWithHistory(t, "1000")
+	env.SetHistory(2000)
+
+	_, err := env.Store.DB().Exec(`
+		CREATE TRIGGER fail_incremental_sync_completion
+		BEFORE UPDATE OF status ON sync_runs
+		WHEN NEW.status = 'completed'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected completion failure');
+		END
+	`)
+	require.NoError(err, "install failure trigger")
+
+	summary, err := env.Syncer.Incremental(env.Context, source)
+	require.Error(err)
+	assert.Nil(summary)
+	assert.ErrorContains(err, "commit incremental sync")
+
+	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err)
+	require.True(updatedSource.SyncCursor.Valid)
+	assert.Equal("1000", updatedSource.SyncCursor.String)
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err)
+	assert.Equal(store.SyncStatusFailed, run.Status)
+	assert.False(run.CursorAfter.Valid)
+}
+
+func TestFullSyncCompletionFailureRollsBackCursor(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg1")
+
+	_, err := env.Store.DB().Exec(`
+		CREATE TRIGGER fail_full_sync_completion
+		BEFORE UPDATE OF status ON sync_runs
+		WHEN NEW.status = 'completed'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected completion failure');
+		END
+	`)
+	require.NoError(err, "install failure trigger")
+
+	summary, err := env.Syncer.Full(env.Context, testEmail)
+	require.Error(err, "full sync should fail when its run cannot be completed")
+	require.NotNil(summary, "failed sync should return its diagnostic summary")
+	assert.ErrorContains(err, "commit full sync")
+
+	source, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err, "GetSourceByIdentifier")
+	assert.False(source.SyncCursor.Valid, "failed completion must roll back the cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusFailed, run.Status, "Status")
+	assert.False(run.CursorAfter.Valid, "failed sync must not record a new cursor")
+}
+
+func TestFullSyncCheckpointFailureDoesNotAdvanceCursor(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg1")
+
+	_, err := env.Store.DB().Exec(`
+		CREATE TRIGGER fail_full_sync_checkpoint
+		BEFORE UPDATE OF messages_processed ON sync_runs
+		BEGIN
+			SELECT RAISE(ABORT, 'injected checkpoint failure');
+		END
+	`)
+	require.NoError(err, "install failure trigger")
+
+	summary, err := env.Syncer.Full(env.Context, testEmail)
+	require.Error(err, "full sync should fail when its checkpoint cannot be saved")
+	assert.Nil(summary, "failed full sync should not return a successful summary")
+	assert.ErrorContains(err, "save sync checkpoint")
+
+	source, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err, "GetSourceByIdentifier")
+	assert.False(source.SyncCursor.Valid, "checkpoint failure must not establish a cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusFailed, run.Status, "Status")
+	assert.False(run.CursorAfter.Valid, "failed sync must not record a new cursor")
+}
+
+func TestFullSyncOnCompletePanicKeepsCommittedState(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	seedMessages(env, 1, 12345, "msg1")
+	env.Syncer.WithProgress(panicOnCompleteProgress{})
+
+	summary, err := env.Syncer.Full(env.Context, testEmail)
+	require.Error(err, "progress panic should be returned as an error")
+	assert.Nil(summary, "panic recovery should not return a success summary")
+	assert.ErrorContains(err, "progress completion panic")
+
+	source, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err, "GetSourceByIdentifier")
+	require.True(source.SyncCursor.Valid, "cursor commit should remain durable")
+	assert.Equal("12345", source.SyncCursor.String, "sync cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusCompleted, run.Status, "committed run must remain completed")
+	require.True(run.CursorAfter.Valid, "completed run should retain cursor_after")
+	assert.Equal("12345", run.CursorAfter.String, "cursor_after")
+}
+
+func TestIncrementalSyncOnCompletePanicKeepsCommittedState(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	source := env.CreateSourceWithHistory(t, "1000")
+	env.SetHistory(2000, historyAdded("msg1"))
+	env.Mock.AddMessage("msg1", testMIME(), []string{"INBOX"})
+	env.Syncer.WithProgress(panicOnCompleteProgress{})
+
+	summary, err := env.Syncer.Incremental(env.Context, source)
+	require.Error(err, "progress panic should be returned as an error")
+	assert.Nil(summary, "panic recovery should not return a success summary")
+	assert.ErrorContains(err, "progress completion panic")
+
+	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err, "GetSourceByIdentifier")
+	require.True(updatedSource.SyncCursor.Valid, "cursor commit should remain durable")
+	assert.Equal("2000", updatedSource.SyncCursor.String, "sync cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusCompleted, run.Status, "committed run must remain completed")
+	require.True(run.CursorAfter.Valid, "completed run should retain cursor_after")
+	assert.Equal("2000", run.CursorAfter.String, "cursor_after")
+}
+
 func TestIncrementalSyncAlreadyCurrentCompletionFailureDoesNotReportSuccess(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -204,6 +364,37 @@ func TestIncrementalSyncAlreadyCurrentCompletionFailureDoesNotReportSuccess(t *t
 	run, err := env.Store.GetLatestSync(source.ID)
 	require.NoError(err, "GetLatestSync")
 	assert.Equal(store.SyncStatusFailed, run.Status, "Status")
+}
+
+func TestIncrementalSyncAlreadyCurrentCannotCompleteSupersededRun(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	source := env.CreateSourceWithHistory(t, "2000")
+	env.Mock.Profile.HistoryID = 2000
+	env.Syncer = New(&supersedeOnProfileAPI{
+		MockAPI:  env.Mock,
+		store:    env.Store,
+		sourceID: source.ID,
+	}, env.Store, nil)
+
+	summary, err := env.Syncer.Incremental(env.Context, source)
+	require.Error(err, "superseded incremental sync must not report completion")
+	assert.Nil(summary, "superseded sync should not return a success summary")
+	assert.ErrorContains(err, "complete up-to-date sync")
+
+	var completed, failed, running int
+	err = env.Store.DB().QueryRow(`
+		SELECT
+			SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END)
+		FROM sync_runs WHERE source_id = ?
+	`, source.ID).Scan(&completed, &failed, &running)
+	require.NoError(err, "count sync run states")
+	assert.Zero(completed, "superseded run must not become completed")
+	assert.Equal(1, failed, "superseded run should remain failed")
+	assert.Equal(1, running, "newer run should remain running")
 }
 
 func TestIncrementalSyncCheckpointFailureKeepsHistoryCursor(t *testing.T) {
@@ -357,13 +548,18 @@ func TestFullSyncWithErrors(t *testing.T) {
 	// Make msg2 fail to fetch
 	env.Mock.GetMessageError["msg2"] = errors.New("temporary fetch failure")
 
-	summary := runFullSync(t, env)
+	summary, syncErr := env.Syncer.Full(env.Context, testEmail)
+	require.Error(syncErr, "full sync should fail when a message cannot be fetched")
+	assert.ErrorContains(syncErr, "1 message")
+	require.NotNil(summary, "failed sync should return its diagnostic summary")
 	assertSummary(t, summary, WantSummary{Added: new(int64(2)), Errors: new(int64(1))})
 
 	source, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
-	run, err := env.Store.GetLastSuccessfulSync(source.ID)
-	require.NoError(err, "GetLastSuccessfulSync")
+	assert.False(source.SyncCursor.Valid, "failed full sync must not establish a cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusFailed, run.Status, "Status")
 	items, err := env.Store.ListSyncRunItems(run.ID, store.SyncRunItemStatusError, 10)
 	require.NoError(err, "ListSyncRunItems")
 	require.Len(items, 1, "error items")
@@ -556,8 +752,15 @@ func TestFullSyncAllErrors(t *testing.T) {
 	env.Mock.GetMessageError["msg2"] = errors.New("temporary fetch failure 2")
 	env.Mock.GetMessageError["msg3"] = errors.New("temporary fetch failure 3")
 
-	summary := runFullSync(t, env)
+	summary, err := env.Syncer.Full(env.Context, testEmail)
+	require.Error(t, err, "full sync should fail when every message fetch fails")
+	assert.ErrorContains(t, err, "3 message")
+	require.NotNil(t, summary, "failed sync should return its diagnostic summary")
 	assertSummary(t, summary, WantSummary{Added: new(int64(0)), Errors: new(int64(3))})
+
+	source, sourceErr := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(t, sourceErr, "GetSourceByIdentifier")
+	assert.False(t, source.SyncCursor.Valid, "failed full sync must not establish a cursor")
 }
 
 func TestFullSyncWithQuery(t *testing.T) {
@@ -582,6 +785,31 @@ func TestFullSyncPagination(t *testing.T) {
 	summary := runFullSync(t, env)
 	assertSummary(t, summary, WantSummary{Added: new(int64(6))})
 	assertListMessagesCalls(t, env, 3)
+}
+
+func TestFullSyncLimitDoesNotEstablishCursor(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	env.Mock.Profile.HistoryID = 12345
+	seedPagedMessages(env, 4)
+	env.SetOptions(t, func(o *Options) {
+		o.Limit = 2
+	})
+
+	summary, err := env.Syncer.Full(env.Context, testEmail)
+	require.Error(err, "limited full sync should report incomplete status")
+	assert.ErrorContains(err, "stopped at --limit 2")
+	require.NotNil(summary, "limited sync should return its diagnostic summary")
+	assert.Equal(int64(2), summary.MessagesFound, "MessagesFound")
+
+	source, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err, "GetSourceByIdentifier")
+	assert.False(source.SyncCursor.Valid, "limited full sync must not establish a cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusFailed, run.Status, "Status")
+	assertMessageCount(t, env.Store, 2)
 }
 
 func TestSyncerWithLogger(t *testing.T) {
@@ -1186,13 +1414,18 @@ func TestFullSyncEmptyRawMIME(t *testing.T) {
 		SizeEstimate: 0,
 	}
 
-	summary := runFullSync(t, env)
+	summary, syncErr := env.Syncer.Full(env.Context, testEmail)
+	require.Error(syncErr, "full sync should fail when a message cannot be ingested")
+	assert.ErrorContains(syncErr, "1 message")
+	require.NotNil(summary, "failed sync should return its diagnostic summary")
 	assertSummary(t, summary, WantSummary{Added: new(int64(1)), Errors: new(int64(1))})
 
 	source, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
-	run, err := env.Store.GetLastSuccessfulSync(source.ID)
-	require.NoError(err, "GetLastSuccessfulSync")
+	assert.False(source.SyncCursor.Valid, "failed full sync must not establish a cursor")
+	run, err := env.Store.GetLatestSync(source.ID)
+	require.NoError(err, "GetLatestSync")
+	assert.Equal(store.SyncStatusFailed, run.Status, "Status")
 	items, err := env.Store.ListSyncRunItems(run.ID, store.SyncRunItemStatusError, 10)
 	require.NoError(err, "ListSyncRunItems")
 	require.Len(items, 1, "error items")

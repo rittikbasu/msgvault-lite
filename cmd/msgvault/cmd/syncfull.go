@@ -14,8 +14,6 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"go.kenn.io/msgvault/internal/gmail"
-	imaplib "go.kenn.io/msgvault/internal/imap"
-	"go.kenn.io/msgvault/internal/microsoft"
 	"go.kenn.io/msgvault/internal/oauth"
 	"go.kenn.io/msgvault/internal/store"
 	"go.kenn.io/msgvault/internal/sync"
@@ -32,7 +30,7 @@ var (
 
 var syncFullCmd = &cobra.Command{
 	Use:   "sync-full [email]",
-	Short: "Perform a full sync of Gmail accounts",
+	Short: "Perform a full sync of the configured Gmail account",
 	Long: `Perform a full synchronization of a Gmail account.
 
 Downloads all messages matching the query (or all messages if no query).
@@ -55,10 +53,7 @@ Examples:
 		if err := validateSyncFullFlags(cmd); err != nil {
 			return err
 		}
-		if isDaemonCLISubprocess() {
-			return runSyncFullLocal(cmd, args)
-		}
-		return runSyncFullHTTP(cmd, args)
+		return runSyncFullLocal(cmd, args)
 	},
 }
 
@@ -85,89 +80,15 @@ func runSyncFullLocal(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer cleanup()
-	dbPath := cfg.DatabaseDSN()
 
 	getOAuthMgr := oauthManagerCache()
-
-	// Determine which sources to sync
-	var sources []*store.Source
-	var syncErrors []string
-	if len(args) == 1 {
-		// Look up all sources matching the identifier and
-		// keep only syncable types (gmail, imap). Non-syncable
-		// sources like mbox/apple-mail imports share the same
-		// identifier namespace but cannot be synced.
-		allMatches, err := s.GetSourcesByIdentifierOrDisplayName(args[0])
-		if err != nil {
-			return fmt.Errorf("look up source: %w", err)
-		}
-		for _, src := range allMatches {
-			if src.SourceType == sourceTypeGmail || src.SourceType == sourceTypeIMAP {
-				sources = append(sources, src)
-			}
-		}
-		if len(sources) == 0 {
-			if len(allMatches) > 0 {
-				// Identifier exists but has no syncable source types.
-				return fmt.Errorf("account %q exists but its source type cannot be synced (only gmail and imap are supported)", args[0])
-			}
-			// Not in DB yet - assume Gmail (legacy behaviour)
-			sources = []*store.Source{{SourceType: sourceTypeGmail, Identifier: args[0]}}
-		}
-	} else {
-		// Sync all configured sources
-		allSources, err := s.ListSources("")
-		if err != nil {
-			return fmt.Errorf("list sources: %w", err)
-		}
-		if len(allSources) == 0 {
-			return errors.New("no accounts configured - run 'add-account' or 'add-imap' first")
-		}
-		for _, src := range allSources {
-			switch src.SourceType {
-			case sourceTypeGmail:
-				if !cfg.OAuth.HasAnyConfig() {
-					fmt.Printf("Skipping %s (OAuth not configured)\n", src.Identifier)
-					continue
-				}
-				appName := sourceOAuthApp(src)
-				// Service accounts are always ready — no per-user token needed
-				if cfg.OAuth.ServiceAccountKeyFor(appName) == "" {
-					mgr, err := getOAuthMgr(appName)
-					if err != nil {
-						syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", src.Identifier, err))
-						continue
-					}
-					if !mgr.HasToken(src.Identifier) {
-						fmt.Printf("Skipping %s (no OAuth token - run 'add-account' first)\n", src.Identifier)
-						continue
-					}
-				}
-			case sourceTypeIMAP:
-				skipMsg, parseErr := imapSkipReason(src)
-				if parseErr != nil {
-					syncErrors = append(syncErrors, fmt.Sprintf("%s: malformed sync_config: %v", src.Identifier, parseErr))
-					continue
-				}
-				if skipMsg != "" {
-					fmt.Println(skipMsg)
-					continue
-				}
-			default:
-				fmt.Printf("Skipping %s (unsupported source type %q)\n", src.Identifier, src.SourceType)
-				continue
-			}
-			sources = append(sources, src)
-		}
-		if len(sources) == 0 {
-			if len(syncErrors) > 0 {
-				return fmt.Errorf("%s", syncErrors[0])
-			}
-			return errors.New("no accounts are ready to sync")
-		}
+	source, err := singleGmailSyncSource(s, args)
+	if err != nil {
+		return err
 	}
+	sources := []*store.Source{source}
+	var syncErrors []string
 
-	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 
@@ -207,9 +128,6 @@ func runSyncFullLocal(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Rebuild analytics cache.
-	rebuildCacheAfterWrite(dbPath)
-
 	if len(syncErrors) > 0 {
 		fmt.Println()
 		fmt.Println("Errors:")
@@ -224,209 +142,52 @@ func runSyncFullLocal(cmd *cobra.Command, args []string) error {
 }
 
 // buildAPIClient creates the appropriate gmail.API client for the given
-// source. saScopes is used when the resolved oauth_app is backed by a
-// service account key; for browser-OAuth sources, scopes flow through the
-// caller-provided getOAuthMgr factory. Pass nil to use oauth.Scopes; pass
-// oauth.ScopesDeletion (or another set) for workflows that need elevated
-// access.
-func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(string) (*oauth.Manager, error), saScopes []string, imapOpts ...imaplib.Option) (gmail.API, error) {
-	switch src.SourceType {
-	case sourceTypeGmail, "":
-		appName := sourceOAuthApp(src)
-		var tokenSource oauth2.TokenSource
+// source. Browser OAuth and service-account flows are both constrained to the
+// exact Gmail readonly scope.
+func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(string) (*oauth.Manager, error)) (gmail.API, error) {
+	if src.SourceType != sourceTypeGmail {
+		return nil, fmt.Errorf("unsupported source type %q; msgvault-lite supports Gmail only", src.SourceType)
+	}
+	appName := sourceOAuthApp(src)
+	var tokenSource oauth2.TokenSource
 
-		// Check for service account configuration
-		if saKeyPath := cfg.OAuth.ServiceAccountKeyFor(appName); saKeyPath != "" {
-			scopes := saScopes
-			if len(scopes) == 0 {
-				scopes = oauth.Scopes
-			}
-			saMgr, err := oauth.NewServiceAccountManager(saKeyPath, scopes)
-			if err != nil {
-				return nil, fmt.Errorf("service account: %w", err)
-			}
-			tokenSource, err = saMgr.TokenSource(ctx, src.Identifier)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			oauthMgr, err := getOAuthMgr(appName)
-			if err != nil {
-				return nil, err
-			}
-			interactive := isatty.IsTerminal(os.Stdin.Fd()) ||
-				isatty.IsCygwinTerminal(os.Stdin.Fd())
-			tokenSource, err = getTokenSourceWithReauth(ctx, oauthMgr, src.Identifier, interactive, gmailReauthHint)
-			if err != nil {
-				return nil, err
-			}
-		}
-		rateLimiter := gmail.NewRateLimiter(float64(cfg.Sync.RateLimitQPS))
-		return gmail.NewClient(tokenSource,
-			gmail.WithLogger(logger),
-			gmail.WithRateLimiter(rateLimiter),
-		), nil
-
-	case sourceTypeIMAP:
-		if !src.SyncConfig.Valid || src.SyncConfig.String == "" {
-			return nil, fmt.Errorf("IMAP source %s has no config (run 'add-imap' first)", src.Identifier)
-		}
-		imapCfg, err := imaplib.ConfigFromJSON(src.SyncConfig.String)
+	if saKeyPath := cfg.OAuth.ServiceAccountKeyFor(appName); saKeyPath != "" {
+		saMgr, err := oauth.NewServiceAccountManager(saKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("parse IMAP config: %w", err)
+			return nil, fmt.Errorf("service account: %w", err)
 		}
-
-		var opts []imaplib.Option
-		opts = append(opts, imaplib.WithLogger(logger))
-		opts = append(opts, imapOpts...)
-
-		var since, before time.Time
-		if syncAfter != "" {
-			t, err := time.Parse("2006-01-02", syncAfter)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --after date %q (expected YYYY-MM-DD): %w", syncAfter, err)
-			}
-			since = t
+		tokenSource, err = saMgr.TokenSource(ctx, src.Identifier)
+		if err != nil {
+			return nil, err
 		}
-		if syncBefore != "" {
-			t, err := time.Parse("2006-01-02", syncBefore)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --before date %q (expected YYYY-MM-DD): %w", syncBefore, err)
-			}
-			before = t
+	} else {
+		oauthMgr, err := getOAuthMgr(appName)
+		if err != nil {
+			return nil, err
 		}
-		if !since.IsZero() || !before.IsZero() {
-			opts = append(opts, imaplib.WithDateFilter(since, before))
-		}
-
-		switch imapCfg.EffectiveAuthMethod() {
-		case imaplib.AuthXOAuth2:
-			if cfg.Microsoft.ClientID == "" {
-				return nil, errors.New("microsoft OAuth not configured — add a [microsoft] section with client_id to config.toml")
-			}
-			msMgr := microsoft.NewManager(
-				cfg.Microsoft.ClientID,
-				cfg.Microsoft.EffectiveTenantID(),
-				cfg.TokensDir(),
-				logger,
-			)
-			tokenFn, err := msMgr.TokenSource(ctx, imapCfg.Username)
-			if err != nil {
-				return nil, fmt.Errorf("load Microsoft token: %w (run 'add-o365' first)", err)
-			}
-			opts = append(opts, imaplib.WithTokenSource(tokenFn))
-			return imaplib.NewClient(imapCfg, "", opts...), nil
-		default:
-			password, err := imaplib.LoadCredentials(cfg.TokensDir(), src.Identifier)
-			if err != nil {
-				return nil, fmt.Errorf("load IMAP credentials: %w (run 'add-imap' first)", err)
-			}
-			return imaplib.NewClient(imapCfg, password, opts...), nil
-		}
-
-	default:
-		return nil, fmt.Errorf("unsupported source type %q", src.SourceType)
-	}
-}
-
-// loadIMAPFolderStates returns the saved per-mailbox states in the map
-// form the IMAP client consumes.
-func loadIMAPFolderStates(s *store.Store, sourceID int64) (map[string]imaplib.FolderState, error) {
-	saved, err := s.GetIMAPFolderStates(sourceID)
-	if err != nil {
-		return nil, err
-	}
-	states := make(map[string]imaplib.FolderState, len(saved))
-	for _, st := range saved {
-		states[st.Mailbox] = imaplib.FolderState{
-			UIDValidity: st.UIDValidity,
-			UIDNext:     st.UIDNext,
+		interactive := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+		tokenSource, err = getTokenSourceWithReauth(ctx, oauthMgr, src.Identifier, interactive, gmailReauthHint)
+		if err != nil {
+			return nil, err
 		}
 	}
-	return states, nil
-}
 
-// imapFolderStateOptions loads saved per-mailbox states for an IMAP
-// source so its client can skip unchanged mailboxes during listing.
-// forceRescan (--noresume) bypasses the saved states so every mailbox
-// is freshly enumerated. Load failures only cost the optimization, so
-// they are logged and swallowed.
-func imapFolderStateOptions(s *store.Store, src *store.Source, forceRescan bool) []imaplib.Option {
-	if forceRescan || src.SourceType != sourceTypeIMAP {
-		return nil
-	}
-	states, err := loadIMAPFolderStates(s, src.ID)
-	if err != nil {
-		logger.Warn("failed to load IMAP folder states", "source", src.Identifier, "error", err)
-		return nil
-	}
-	if len(states) == 0 {
-		return nil
-	}
-	return []imaplib.Option{imaplib.WithFolderStates(states)}
-}
-
-// saveIMAPFolderStates persists the per-mailbox states observed during
-// listing, but only after a sync that completed cleanly: an
-// interrupted, truncated (--limit), or partly failed run must not
-// advance the watermarks, or the messages it skipped would never be
-// fetched. Save failures only cost the next run's speedup, so they are
-// logged and swallowed.
-func saveIMAPFolderStates(s *store.Store, src *store.Source, apiClient gmail.API, summary *gmail.SyncSummary, limit int) {
-	imapClient, ok := apiClient.(*imaplib.Client)
-	if !ok || summary == nil {
-		return
-	}
-	if summary.Errors > 0 {
-		return
-	}
-	if limit > 0 && summary.MessagesFound >= int64(limit) {
-		return
-	}
-	observed := imapClient.ObservedFolderStates()
-	if len(observed) == 0 {
-		return
-	}
-	states := make([]store.IMAPFolderState, 0, len(observed))
-	for mailbox, st := range observed {
-		states = append(states, store.IMAPFolderState{
-			Mailbox:     mailbox,
-			UIDValidity: st.UIDValidity,
-			UIDNext:     st.UIDNext,
-		})
-	}
-	if err := s.UpsertIMAPFolderStates(src.ID, states); err != nil {
-		logger.Warn("failed to save IMAP folder states", "source", src.Identifier, "error", err)
-	}
+	rateLimiter := gmail.NewRateLimiter(float64(cfg.Sync.RateLimitQPS))
+	return gmail.NewClient(tokenSource,
+		gmail.WithLogger(logger),
+		gmail.WithRateLimiter(rateLimiter),
+	), nil
 }
 
 func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error), src *store.Source) error {
 	progress := &CLIProgress{}
-
-	// --noresume promises a fresh sync, so it must also bypass the
-	// saved folder watermarks and re-enumerate every mailbox. A clean
-	// completed run still saves fresh watermarks afterwards.
-	imapOpts := imapFolderStateOptions(s, src, syncNoResume)
-	if src.SourceType == sourceTypeIMAP {
-		imapOpts = append(imapOpts, imaplib.WithListProgress(progress.OnIMAPListProgress))
-	}
-	apiClient, err := buildAPIClient(ctx, src, getOAuthMgr, nil, imapOpts...)
+	apiClient, err := buildAPIClient(ctx, src, getOAuthMgr)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = apiClient.Close() }()
 
-	// Build query from flags (Gmail only; IMAP date filters are
-	// handled via WithDateFilter on the client).
 	query := buildSyncQuery()
-	if query != "" && src.SourceType == sourceTypeIMAP {
-		// --after/--before are handled natively by IMAP SEARCH;
-		// only warn about --query which has no IMAP equivalent.
-		if syncQuery != "" {
-			fmt.Printf("Warning: --query is not supported for IMAP sources and will be ignored.\n\n")
-		}
-		query = ""
-	}
 
 	// Set up sync options
 	opts := sync.DefaultOptions()
@@ -435,15 +196,6 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 	opts.NoResume = syncNoResume
 	opts.Limit = syncLimit
 	opts.AttachmentsDir = cfg.AttachmentsDir()
-
-	// IMAP page tokens are numeric offsets into a message list
-	// rebuilt from live mailbox state each session. Cross-session
-	// resume is unreliable because additions or deletions shift
-	// the offsets. Already-imported messages are efficiently
-	// skipped via MessageExistsWithRawBatch.
-	if src.SourceType == sourceTypeIMAP {
-		opts.NoResume = true
-	}
 
 	// Create syncer with progress reporter
 	syncer := sync.New(apiClient, s, opts).
@@ -457,7 +209,7 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 		displayID = src.DisplayName.String
 	}
 	fmt.Printf("Starting full sync for %s\n", displayID)
-	if query != "" && src.SourceType != sourceTypeIMAP {
+	if query != "" {
 		fmt.Printf("Query: %s\n", query)
 	}
 	fmt.Println()
@@ -473,10 +225,6 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 			return nil
 		}
 		return fmt.Errorf("sync failed: %w", err)
-	}
-
-	if src.SourceType == sourceTypeIMAP {
-		saveIMAPFolderStates(s, src, apiClient, summary, opts.Limit)
 	}
 
 	// Print summary; skip the spacer when no progress lines were
@@ -734,47 +482,9 @@ func (p *CLIProgress) OnError(err error) {
 	_, _ = fmt.Fprintf(p.writer(), "\nError: %v\n", err)
 }
 
-// imapSkipReason checks whether an IMAP source has the credentials needed to
-// sync. Return values:
-//   - ("", nil)     — credentials present, source is ready
-//   - ("msg", nil)  — credentials absent; print the message and skip
-//   - ("", err)     — sync_config is malformed; add to the error list
-func imapSkipReason(src *store.Source) (string, error) {
-	if !src.SyncConfig.Valid || src.SyncConfig.String == "" {
-		if !imaplib.HasCredentials(cfg.TokensDir(), src.Identifier) {
-			return fmt.Sprintf("Skipping %s (no credentials — run 'add-imap' or 'add-o365' first)", src.Identifier), nil
-		}
-		return "", nil
-	}
-	imapCfg, err := imaplib.ConfigFromJSON(src.SyncConfig.String)
-	if err != nil {
-		return "", err
-	}
-	switch imapCfg.EffectiveAuthMethod() {
-	case imaplib.AuthXOAuth2:
-		if cfg.Microsoft.ClientID == "" {
-			return fmt.Sprintf("Skipping %s (Microsoft OAuth not configured — add client_id to [microsoft] in config.toml)", src.Identifier), nil
-		}
-		msMgr := microsoft.NewManager(
-			cfg.Microsoft.ClientID,
-			cfg.Microsoft.EffectiveTenantID(),
-			cfg.TokensDir(),
-			logger,
-		)
-		if !msMgr.HasToken(imapCfg.Username) {
-			return fmt.Sprintf("Skipping %s (no Microsoft token — run 'add-o365' first)", src.Identifier), nil
-		}
-	default:
-		if !imaplib.HasCredentials(cfg.TokensDir(), src.Identifier) {
-			return fmt.Sprintf("Skipping %s (no credentials — run 'add-imap' first)", src.Identifier), nil
-		}
-	}
-	return "", nil
-}
-
 func init() {
 	syncFullCmd.Flags().StringVar(&syncQuery, "query", "", "Gmail search query")
-	syncFullCmd.Flags().BoolVar(&syncNoResume, "noresume", false, "Force fresh sync (don't resume; re-enumerates all IMAP folders)")
+	syncFullCmd.Flags().BoolVar(&syncNoResume, "noresume", false, "Force fresh sync (don't resume)")
 	syncFullCmd.Flags().StringVar(&syncBefore, "before", "", "Only messages before this date (YYYY-MM-DD)")
 	syncFullCmd.Flags().StringVar(&syncAfter, "after", "", "Only messages after this date (YYYY-MM-DD)")
 	syncFullCmd.Flags().IntVar(&syncLimit, "limit", 0, "Limit number of messages (for testing)")

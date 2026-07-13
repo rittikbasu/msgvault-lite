@@ -25,7 +25,6 @@ var (
 	cfgFile    string
 	homeDir    string
 	verbose    bool
-	useLocal   bool // Use local daemon even when remote is configured
 	logFile    string
 	logLevel   string
 	noLogFile  bool
@@ -47,8 +46,8 @@ var rootCmd = &cobra.Command{
 	Long: `msgvault is an offline email archive tool that exports and stores
 email data locally with full-text search capabilities.
 
-This is the Go implementation providing sync, search, and TUI functionality
-in a single binary.`,
+It provides direct local Gmail sync, search, verification, and backup in a
+single binary.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Cobra's command lifecycle (v1.10.x) is:
 		//   1. ParseFlags + ValidateArgs (Args:)
@@ -131,7 +130,7 @@ in a single binary.`,
 			stderrIsTerminal := isatty.IsTerminal(os.Stderr.Fd()) ||
 				isatty.IsCygwinTerminal(os.Stderr.Fd())
 			if consoleLevel := logging.ResolveConsoleLevel(
-				levelString, verbose, fileDisabled, stderrIsTerminal, isDaemonCLISubprocess(),
+				levelString, verbose, fileDisabled, stderrIsTerminal, false,
 			); consoleLevel != nil {
 				levelOverride = consoleLevel
 				humanConsole = true
@@ -279,6 +278,7 @@ func Execute() error {
 // Installs a panic recovery and closes the log file handler on
 // return so every run ends cleanly in the log.
 func ExecuteContext(ctx context.Context) error {
+	retainLiteCommands(rootCmd)
 	silenceUsageOnce.Do(func() { silenceUsageInRunE(rootCmd) })
 
 	// Defer ordering is load-bearing. LIFO means recoverAndLogPanic
@@ -309,6 +309,31 @@ func ExecuteContext(ctx context.Context) error {
 		return fmt.Errorf("execute command: %w", err)
 	}
 	return nil
+}
+
+var liteCommandNames = map[string]struct{}{
+	"add-account":  {},
+	"backup":       {},
+	"completion":   {},
+	"logs":         {},
+	"search":       {},
+	"show-message": {},
+	"stats":        {},
+	"sync":         {},
+	"sync-full":    {},
+	"verify":       {},
+	"version":      {},
+}
+
+func retainLiteCommands(root *cobra.Command) {
+	for _, command := range root.Commands() {
+		if strings.HasPrefix(command.Name(), "test-") {
+			continue
+		}
+		if _, keep := liteCommandNames[command.Name()]; !keep {
+			root.RemoveCommand(command)
+		}
+	}
 }
 
 // usageErr re-enables the usage block for cmd and returns err. Use inside
@@ -448,14 +473,8 @@ type tokenReauthorizer interface {
 	AuthorizeManual(ctx context.Context, email string) error
 }
 
-type scopePreservingReauthorizer interface {
-	AuthorizeManualPreservingGrantedScopes(ctx context.Context, email string) error
-}
-
-// reauthHint returns caller-specific, out-of-band re-authorization guidance for
-// an expired/revoked token in a non-interactive session. Gmail and Calendar use
-// different commands (add-account vs add-calendar), so the shared reauth helper
-// must be told which one to point the user at.
+// reauthHint returns out-of-band re-authorization guidance for an
+// expired/revoked token in a non-interactive session.
 type reauthHint func(email string) string
 
 // gmailReauthHint points at add-account, the Gmail authorization command.
@@ -463,15 +482,6 @@ func gmailReauthHint(email string) string {
 	return fmt.Sprintf(
 		"re-authorize with 'msgvault add-account %s --force' (or "+
 			"'msgvault add-account %s --headless' on a server without a browser)",
-		email, email,
-	)
-}
-
-// calendarReauthHint points at add-calendar, the Calendar authorization command.
-func calendarReauthHint(email string) string {
-	return fmt.Sprintf(
-		"re-authorize with 'msgvault add-calendar %s' (or "+
-			"'msgvault add-calendar %s --headless' on a server without a browser)",
 		email, email,
 	)
 }
@@ -526,7 +536,7 @@ func getTokenSourceWithReauth(
 	// account needs authorization and can select the correct one.
 	// AuthorizeManual validates the token and atomically saves it,
 	// so the old token is only overwritten after validation succeeds.
-	if authErr := authorizeManualForReauth(ctx, mgr, email); authErr != nil {
+	if authErr := mgr.AuthorizeManual(ctx, email); authErr != nil {
 		var mismatch *oauth.TokenMismatchError
 		if errors.As(authErr, &mismatch) {
 			return nil, fmt.Errorf(
@@ -549,13 +559,6 @@ func getTokenSourceWithReauth(
 	}
 
 	return tokenSource, nil
-}
-
-func authorizeManualForReauth(ctx context.Context, mgr tokenReauthorizer, email string) error {
-	if preserving, ok := mgr.(scopePreservingReauthorizer); ok {
-		return preserving.AuthorizeManualPreservingGrantedScopes(ctx, email)
-	}
-	return mgr.AuthorizeManual(ctx, email)
 }
 
 // oauthManagerCache returns a resolver function that lazily creates and
@@ -596,7 +599,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.msgvault/config.toml)")
 	rootCmd.PersistentFlags().StringVar(&homeDir, "home", "", "home directory (overrides MSGVAULT_HOME)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output (implies --log-level=debug)")
-	rootCmd.PersistentFlags().BoolVar(&useLocal, "local", false, "use local daemon instead of configured remote")
 	rootCmd.PersistentFlags().StringVar(&logFile, "log-file", "",
 		"override log file path (default: <data dir>/logs/msgvault-YYYY-MM-DD.log)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "",

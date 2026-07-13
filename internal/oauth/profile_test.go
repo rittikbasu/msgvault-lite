@@ -89,18 +89,3 @@ func TestFetchTokenProfileEmail(t *testing.T) {
 		})
 	}
 }
-
-func TestTokenProfileEndpointForScopes(t *testing.T) {
-	assert := assert.New(t)
-
-	calendar := tokenProfileEndpointForScopes(ScopesCalendar)
-	assert.Equal(defaultCalendarProfileURL, calendar.url, "Calendar-only grants validate through Calendar")
-	assert.Equal("Calendar API", calendar.serviceName, "Calendar-only service name")
-
-	gmail := tokenProfileEndpointForScopes(Scopes)
-	assert.Equal(defaultProfileURL, gmail.url, "Gmail grants keep Gmail profile validation")
-	assert.Equal("Gmail API", gmail.serviceName, "Gmail service name")
-
-	combined := tokenProfileEndpointForScopes(ScopesGmailCalendar)
-	assert.Equal(defaultProfileURL, combined.url, "combined Gmail+Calendar grants keep Gmail profile validation")
-}

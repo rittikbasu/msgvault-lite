@@ -77,11 +77,12 @@ func TestAddAccount_InheritedBindingValidatesToken(t *testing.T) {
 
 			tokensDir := filepath.Join(tmpDir, "tokens")
 			require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir")
-			tokenData, _ := json.Marshal(map[string]string{
+			tokenData, _ := json.Marshal(map[string]any{
 				"access_token":  "fake",
 				"refresh_token": "fake",
 				"token_type":    "Bearer",
 				"client_id":     tc.clientID,
+				"scopes":        oauth.Scopes,
 			})
 			require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@acme.com.json"), tokenData, 0600), "write token")
 
@@ -141,7 +142,7 @@ func TestAddAccount_CalendarOnlyTokenRequiresGmailReauth(t *testing.T) {
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
-		"scopes":        oauth.ScopesCalendar,
+		"scopes":        []string{"https://www.googleapis.com/auth/calendar.readonly"},
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
@@ -188,7 +189,7 @@ func TestAddAccount_CalendarOnlyTokenRequiresGmailReauth(t *testing.T) {
 	require.Nil(src)
 }
 
-func TestAddAccount_FullGmailScopeTokenCanBeReused(t *testing.T) {
+func TestAddAccount_OverprivilegedGmailTokenRequiresReauth(t *testing.T) {
 	require := require.New(t)
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "msgvault.db")
@@ -200,7 +201,10 @@ func TestAddAccount_FullGmailScopeTokenCanBeReused(t *testing.T) {
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
-		"scopes":        oauth.ScopesDeletion,
+		"scopes": []string{
+			oauth.ScopeGmailReadonly,
+			"https://www.googleapis.com/auth/gmail.modify",
+		},
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
@@ -245,25 +249,15 @@ func TestAddAccount_FullGmailScopeTokenCanBeReused(t *testing.T) {
 	root.AddCommand(testCmd)
 	root.SetArgs([]string{"add-account", "user@example.com", "--no-default-identity"})
 
-	require.NoError(root.ExecuteContext(ctx))
+	require.Error(root.ExecuteContext(ctx), "overprivileged token must trigger readonly reauthorization")
 
 	s, err := store.Open(dbPath)
 	require.NoError(err, "open store")
 	defer func() { _ = s.Close() }()
 	require.NoError(s.InitSchema(), "init schema")
 	src, err := findGmailSource(s, "user@example.com")
-	require.NoError(err, "find gmail source")
-	require.NotNil(src, "expected Gmail source to be registered")
-}
-
-func TestAddAccountOAuthScopesForTokenPreservesExistingCalendarGrant(t *testing.T) {
-	assert := assert.New(t)
-
-	assert.ElementsMatch(oauth.Scopes, addAccountOAuthScopesForToken(false, nil),
-		"new and legacy-token Gmail auth should request only Gmail scopes")
-	assert.ElementsMatch(append(append([]string{}, oauth.Scopes...), oauth.ScopeCalendarReadonly),
-		addAccountOAuthScopesForToken(true, oauth.ScopesCalendar),
-		"Calendar-only tokens should reauthorize with Gmail while preserving Calendar")
+	require.ErrorIs(err, errGmailSourceNotFound)
+	require.Nil(src)
 }
 
 // TestAddAccount_RebindWithExistingToken verifies that switching
@@ -291,11 +285,12 @@ func TestAddAccount_RebindWithExistingToken(t *testing.T) {
 	require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir tokens")
 	// client_id must match the fake client secrets so
 	// TokenMatchesClient returns true (headless rebind scenario).
-	tokenData, err := json.Marshal(map[string]string{
+	tokenData, err := json.Marshal(map[string]any{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
+		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
 	tokenPath := filepath.Join(tokensDir, "user@acme.com.json")
@@ -515,11 +510,12 @@ func TestAddAccount_ExplicitDefaultAcceptsMatchingToken(t *testing.T) {
 	tokensDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir tokens")
 	// Token with client_id matching the fake secrets
-	tokenData, err := json.Marshal(map[string]string{
+	tokenData, err := json.Marshal(map[string]any{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
+		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(
@@ -737,11 +733,12 @@ func TestAddAccount_AutoDefaultIdentityFires(t *testing.T) {
 
 	tokensDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir tokens")
-	tokenData, err := json.Marshal(map[string]string{
+	tokenData, err := json.Marshal(map[string]any{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
+		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
@@ -808,11 +805,12 @@ func TestAddAccount_NoDefaultIdentitySuppresses(t *testing.T) {
 
 	tokensDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir tokens")
-	tokenData, err := json.Marshal(map[string]string{
+	tokenData, err := json.Marshal(map[string]any{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
+		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
@@ -883,11 +881,12 @@ func TestAddAccount_DeferredLegacyIdentityMigrationFires(t *testing.T) {
 
 	tokensDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir tokens")
-	tokenData, err := json.Marshal(map[string]string{
+	tokenData, err := json.Marshal(map[string]any{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
+		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
@@ -986,11 +985,12 @@ func TestAddAccount_LegacyMigrationDoesNotSuppressDefaultIdentity(t *testing.T) 
 
 	tokensDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(os.MkdirAll(tokensDir, 0700), "mkdir tokens")
-	tokenData, err := json.Marshal(map[string]string{
+	tokenData, err := json.Marshal(map[string]any{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
 		"client_id":     "test.apps.googleusercontent.com",
+		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
 	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")

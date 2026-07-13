@@ -57,18 +57,13 @@ Examples:
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
 func runLogsCmd(cmd *cobra.Command, args []string) error {
-	// Validate --level up front (on the client, before proxying to the
-	// daemon) so a typo fails fast with the allowed set instead of
-	// silently matching nothing.
+	// Validate --level up front so a typo fails fast with the allowed set
+	// instead of silently matching nothing.
 	if logsLevel != "" && !slices.Contains(validLogLevels, strings.ToLower(logsLevel)) {
 		return usageErr(cmd, fmt.Errorf(
 			"invalid --level: %q (want one of: %s)",
 			logsLevel, strings.Join(validLogLevels, ", "),
 		))
-	}
-
-	if !isDaemonCLISubprocess() {
-		return runDaemonCLICommandHTTPFromCobra(cmd, args)
 	}
 
 	dir := cfg.LogsDir()

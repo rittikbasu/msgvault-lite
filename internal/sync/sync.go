@@ -374,8 +374,10 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 		// Save checkpoint
 		pageToken = listResp.NextPageToken
 		state.checkpoint.PageToken = pageToken
-		if err := s.store.UpdateSyncCheckpoint(state.syncID, state.checkpoint); err != nil {
-			s.logger.Warn("failed to save checkpoint", "error", err)
+		if checkpointErr := s.store.UpdateSyncCheckpoint(state.syncID, state.checkpoint); checkpointErr != nil {
+			syncErr := fmt.Errorf("save sync checkpoint: %w", checkpointErr)
+			s.failSyncUnlessCanceled(state.syncID, syncErr)
+			return nil, syncErr
 		}
 
 		// Stop if we've hit the limit
@@ -389,32 +391,7 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 		}
 	}
 
-	// Update source with final history ID.
-	// Full sync always advances the cursor (it records the starting point
-	// for future incremental syncs), but warn when errors occurred.
-	historyIDStr := strconv.FormatUint(profile.HistoryID, 10)
-	if state.checkpoint.ErrorsCount > 0 {
-		s.logger.Warn("full sync completed with errors",
-			"errors", state.checkpoint.ErrorsCount,
-			"history_id", historyIDStr)
-	}
-	if err := s.store.UpdateSourceSyncCursor(source.ID, historyIDStr); err != nil {
-		s.logger.Warn("failed to update sync cursor", "error", err)
-	}
-
-	// Mark sync complete
-	if err := s.store.CompleteSync(state.syncID, historyIDStr); err != nil {
-		s.logger.Warn("failed to complete sync", "error", err)
-	}
-
-	// Checkpoint WAL after sync to fold it back into the main database.
-	// This prevents WAL accumulation across long sync sessions and ensures
-	// readers (e.g. build-cache) see a consistent database state.
-	if err := s.store.CheckpointWAL(); err != nil {
-		s.logger.Warn("wal checkpoint after sync failed", "error", err)
-	}
-
-	// Build summary
+	// Build the summary before deciding whether this run is safe to commit.
 	summary.EndTime = time.Now()
 	summary.Duration = summary.EndTime.Sub(summary.StartTime)
 	summary.MessagesFound = state.checkpoint.MessagesProcessed
@@ -423,6 +400,37 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 	summary.MessagesSkipped = state.checkpoint.MessagesProcessed - state.checkpoint.MessagesAdded - state.checkpoint.MessagesUpdated
 	summary.Errors = state.checkpoint.ErrorsCount
 	summary.FinalHistoryID = profile.HistoryID
+
+	failWithoutAdvancing := func(syncErr error) (*gmail.SyncSummary, error) {
+		if failErr := s.store.FailSync(state.syncID, syncErr.Error()); failErr != nil {
+			return summary, errors.Join(syncErr, fmt.Errorf("record full sync failure: %w", failErr))
+		}
+		return summary, syncErr
+	}
+	if state.checkpoint.ErrorsCount > 0 {
+		return failWithoutAdvancing(fmt.Errorf(
+			"full sync incomplete: %d message(s) failed; cursor not advanced",
+			state.checkpoint.ErrorsCount,
+		))
+	}
+	if s.opts.Limit > 0 && state.checkpoint.MessagesProcessed >= int64(s.opts.Limit) {
+		return failWithoutAdvancing(fmt.Errorf(
+			"full sync stopped at --limit %d; cursor not advanced",
+			s.opts.Limit,
+		))
+	}
+
+	historyIDStr := strconv.FormatUint(profile.HistoryID, 10)
+	if err := s.store.CommitSync(source.ID, state.syncID, historyIDStr); err != nil {
+		return failWithoutAdvancing(fmt.Errorf("commit full sync: %w", err))
+	}
+
+	// Checkpoint WAL after sync to fold it back into the main database.
+	// This prevents WAL accumulation across long sync sessions and ensures
+	// readers (e.g. build-cache) see a consistent database state.
+	if err := s.store.CheckpointWAL(); err != nil {
+		s.logger.Warn("wal checkpoint after sync failed", "error", err)
+	}
 
 	s.progress.OnComplete(summary)
 	return summary, nil

@@ -51,7 +51,7 @@ func TestNewServiceAccountManagerRejectsInsecureKeyPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service-account.json")
 	writeServiceAccountKey(t, path, 0644)
 
-	_, err := NewServiceAccountManager(path, Scopes)
+	_, err := NewServiceAccountManager(path)
 	require.Error(t, err, "expected insecure permission error")
 	assert.ErrorContains(t, err, "service account key permissions")
 }
@@ -60,24 +60,16 @@ func TestNewServiceAccountManagerAcceptsOwnerOnlyKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service-account.json")
 	writeServiceAccountKey(t, path, 0600)
 
-	_, err := NewServiceAccountManager(path, Scopes)
+	mgr, err := NewServiceAccountManager(path)
 	require.NoError(t, err, "NewServiceAccountManager")
-}
-
-func TestNewServiceAccountManagerRejectsEmptyScopes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "service-account.json")
-	writeServiceAccountKey(t, path, 0600)
-
-	_, err := NewServiceAccountManager(path, nil)
-	require.Error(t, err, "expected empty scopes error")
-	assert.ErrorContains(t, err, "at least one scope")
+	assert.Equal(t, []string{ScopeGmailReadonly}, mgr.scopes)
 }
 
 func TestNewServiceAccountManagerRejectsMalformedJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service-account.json")
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0600), "WriteFile")
 
-	_, err := NewServiceAccountManager(path, Scopes)
+	_, err := NewServiceAccountManager(path)
 	require.Error(t, err, "expected parse error")
 	assert.ErrorContains(t, err, "parse service account key")
 }

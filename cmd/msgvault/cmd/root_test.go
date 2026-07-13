@@ -391,32 +391,6 @@ func (m *mockReauthorizer) AuthorizeManual(ctx context.Context, email string) er
 	return nil
 }
 
-// AuthorizePreservingGrantedScopes is the browser scope-preserving reauth the
-// sync preflight uses. It shares authorizeCount/authorizeFn with Authorize so
-// preflight tests can assert the reauth happened without a separate seam.
-func (m *mockReauthorizer) AuthorizePreservingGrantedScopes(ctx context.Context, email string) error {
-	m.authorizeCount++
-	if m.authorizeFn != nil {
-		return m.authorizeFn(ctx, email)
-	}
-	return nil
-}
-
-type preservingMockReauthorizer struct {
-	*mockReauthorizer
-
-	preserveFn             func(ctx context.Context, email string) error
-	authorizePreserveCount int
-}
-
-func (m *preservingMockReauthorizer) AuthorizeManualPreservingGrantedScopes(ctx context.Context, email string) error {
-	m.authorizePreserveCount++
-	if m.preserveFn != nil {
-		return m.preserveFn(ctx, email)
-	}
-	return nil
-}
-
 // fakeTokenSource implements extOAuth2.TokenSource for tests.
 type fakeTokenSource struct{}
 
@@ -602,40 +576,4 @@ func TestGetTokenSourceWithReauth(t *testing.T) {
 		require.ErrorContains(t, err, "add-account x@gmail.com --headless")
 	})
 
-	// A Calendar caller must be pointed at add-calendar, not the Gmail
-	// add-account flow (wrong scopes for a Calendar token failure).
-	t.Run("non-interactive calendar error points at add-calendar", func(t *testing.T) {
-		mock := &mockReauthorizer{
-			tokenSourceFn: func(_ context.Context, _ string) (extOAuth2.TokenSource, error) {
-				return nil, invalidGrant
-			},
-			hasTokenVal: true,
-		}
-		_, err := getTokenSourceWithReauth(context.Background(), mock, "x@gmail.com", false, calendarReauthHint)
-		require.ErrorContains(t, err, "add-calendar x@gmail.com")
-		require.ErrorContains(t, err, "add-calendar x@gmail.com --headless")
-		require.NotContains(t, err.Error(), "add-account")
-	})
-}
-
-func TestGetTokenSourceWithReauthUsesScopePreservingReauth(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-
-	invalidGrant := &extOAuth2.RetrieveError{ErrorCode: "invalid_grant"}
-	base := &mockReauthorizer{hasTokenVal: true}
-	m := &preservingMockReauthorizer{mockReauthorizer: base}
-	base.tokenSourceFn = func(_ context.Context, _ string) (extOAuth2.TokenSource, error) {
-		if base.tokenSourceCall == 1 {
-			return nil, fmt.Errorf("refresh: %w", invalidGrant)
-		}
-		return fakeTokenSource{}, nil
-	}
-
-	ts, err := getTokenSourceWithReauth(context.Background(), m, "test@gmail.com", true, gmailReauthHint)
-
-	require.NoError(err)
-	assert.NotNil(ts)
-	assert.Equal(1, m.authorizePreserveCount, "scope-preserving reauth call count")
-	assert.Equal(0, m.authorizeManualCount, "plain reauth call count")
 }

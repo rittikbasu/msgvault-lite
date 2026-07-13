@@ -21,9 +21,6 @@ func acquireDirectSQLiteWriteLock(cfg *config.Config) (func(), error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
 	}
-	if isDaemonCLISubprocess() {
-		return func() {}, nil
-	}
 	if store.IsPostgresURL(cfg.DatabaseDSN()) {
 		return func() {}, nil
 	}
@@ -45,61 +42,11 @@ func acquireDirectSQLiteWriteLock(cfg *config.Config) (func(), error) {
 // msgvault process and how to proceed. When a local daemon is discoverable the
 // message names it so the remedy ("msgvault serve stop") is concrete.
 func archiveOwnedError(dataDir string) error {
-	if rt := findDaemonRuntime(dataDir); rt != nil {
-		return fmt.Errorf(
-			"the msgvault archive is owned by the running daemon at %s; "+
-				"stop it with `msgvault serve stop` (or wait for the active "+
-				"operation to finish), then retry",
-			urlFromDaemonRuntime(rt),
-		)
-	}
+	_ = dataDir
 	return errors.New(
-		"the msgvault archive is owned by another msgvault process; wait for " +
-			"that operation to finish — or run `msgvault serve stop` if a daemon " +
-			"is running — then retry",
+		"the msgvault archive is owned by another msgvault process; " +
+			"wait for that operation to finish, then retry",
 	)
-}
-
-// directSQLiteWriterOwnsArchive reports whether a direct CLI writer currently
-// owns the local SQLite archive: the write-owner lock is held while no daemon
-// advertises a runtime record. PostgreSQL deployments do not use this lock. A
-// live daemon legitimately owns the lock, so its presence means this is not a
-// direct-writer situation.
-func directSQLiteWriterOwnsArchive(cfg *config.Config) (bool, error) {
-	if cfg == nil || store.IsPostgresURL(cfg.DatabaseDSN()) {
-		return false, nil
-	}
-	records, err := listLiveDaemonRuntimeRecords(cfg.Data.DataDir)
-	if err != nil {
-		return false, err
-	}
-	if len(records) > 0 {
-		return false, nil
-	}
-	lock, err := tryAcquireWriteOwnerLock(cfg.Data.DataDir)
-	if err != nil {
-		return errors.As(err, &writeOwnerLockHeldError{}), nil
-	}
-	_ = lock.Close()
-	return false, nil
-}
-
-// daemonAutostartPreflight blocks a daemon autostart when a direct writer
-// already owns the archive, returning an actionable error instead of letting
-// the daemon subprocess fail opaquely on the held write-owner lock.
-func daemonAutostartPreflight(cfg *config.Config) error {
-	owned, err := directSQLiteWriterOwnsArchive(cfg)
-	if err != nil {
-		return err
-	}
-	if owned {
-		return errors.New(
-			"a local msgvault write operation is in progress; the background " +
-				"daemon (needed for reads) cannot start while the archive is " +
-				"being written — wait for the write to finish and retry",
-		)
-	}
-	return nil
 }
 
 // openStoreAndInitWith opens the local archive and initializes schema while the

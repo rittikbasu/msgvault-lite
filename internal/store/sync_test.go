@@ -259,6 +259,59 @@ func TestScanSource_NullRequiredTimestamp(t *testing.T) {
 	assert.ErrorContains(err, "NULL", "error should mention NULL status")
 }
 
+func TestCommitSyncRejectsSupersededRun(t *testing.T) {
+	f := storetest.New(t)
+	oldRunID := f.StartSync()
+	newRunID := f.StartSync()
+
+	err := f.Store.CommitSync(f.Source.ID, oldRunID, "2000")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "current running sync")
+
+	source, err := f.Store.GetSourceByID(f.Source.ID)
+	require.NoError(t, err)
+	assert.False(t, source.SyncCursor.Valid)
+	active, err := f.Store.GetActiveSync(f.Source.ID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	assert.Equal(t, newRunID, active.ID)
+}
+
+func TestCommitSyncRejectsRunFromAnotherSource(t *testing.T) {
+	f := storetest.New(t)
+	runID := f.StartSync()
+	other, err := f.Store.GetOrCreateSource("gmail", "other@example.com")
+	require.NoError(t, err)
+
+	err = f.Store.CommitSync(other.ID, runID, "2000")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "current running sync")
+
+	other, err = f.Store.GetSourceByID(other.ID)
+	require.NoError(t, err)
+	assert.False(t, other.SyncCursor.Valid)
+	active, err := f.Store.GetActiveSync(f.Source.ID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	assert.Equal(t, runID, active.ID)
+}
+
+func TestCommitSyncAdvancesMatchingRun(t *testing.T) {
+	f := storetest.New(t)
+	runID := f.StartSync()
+
+	require.NoError(t, f.Store.CommitSync(f.Source.ID, runID, "2000"))
+	source, err := f.Store.GetSourceByID(f.Source.ID)
+	require.NoError(t, err)
+	require.True(t, source.SyncCursor.Valid)
+	assert.Equal(t, "2000", source.SyncCursor.String)
+	run, err := f.Store.GetLatestSync(f.Source.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.SyncStatusCompleted, run.Status)
+	require.True(t, run.CursorAfter.Valid)
+	assert.Equal(t, "2000", run.CursorAfter.String)
+}
+
 func TestStore_HasAnyActiveSync(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)

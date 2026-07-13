@@ -21,10 +21,7 @@ var (
 var showMessageCmd = &cobra.Command{
 	Use:   "show-message <id>",
 	Short: "Show full message details",
-	Long: `Show the complete details of a message by its internal ID or Gmail ID.
-
-Uses configured remote server or the local daemon by default.
-Use --local to use the local daemon even when a remote is configured.
+	Long: `Show the complete details of a local message by its internal ID or Gmail ID.
 
 This command displays the full message including headers, body, labels,
 and attachment information. Use --json for programmatic output.
@@ -62,13 +59,19 @@ func resolveMessageIDArg(raw string) (string, error) {
 }
 
 func showHTTPMessage(cmd *cobra.Command, idStr string) error {
-	s, _, err := OpenHTTPStore(cmd.Context())
+	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	msg, err := s.GetCLIMessage(cmd.Context(), idStr)
+	engine := query.NewSQLiteEngine(s.DB())
+	var msg *query.MessageDetail
+	if id, parseErr := strconv.ParseInt(idStr, 10, 64); parseErr == nil {
+		msg, err = engine.GetMessage(cmd.Context(), id)
+	} else {
+		msg, err = engine.GetMessageBySourceID(cmd.Context(), idStr)
+	}
 	if errors.Is(err, store.ErrMessageNotFound) {
 		return fmt.Errorf("message not found: %s", idStr)
 	}

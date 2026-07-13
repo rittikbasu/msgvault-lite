@@ -62,8 +62,10 @@ func WithRateLimiter(rl *RateLimiter) ClientOption {
 
 // NewClient creates a new Gmail API client.
 func NewClient(tokenSource oauth2.TokenSource, opts ...ClientOption) *Client {
+	httpClient := oauth2.NewClient(context.Background(), tokenSource)
+	httpClient.Transport = &readOnlyTransport{base: httpClient.Transport}
 	c := &Client{
-		httpClient:  oauth2.NewClient(context.Background(), tokenSource),
+		httpClient:  httpClient,
 		userID:      "me",
 		concurrency: 10,
 		logger:      slog.Default(),
@@ -82,6 +84,24 @@ func NewClient(tokenSource oauth2.TokenSource, opts ...ClientOption) *Client {
 	return c
 }
 
+type readOnlyTransport struct {
+	base http.RoundTripper
+}
+
+func (t *readOnlyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := validateReadOnlyMethod(req.Method); err != nil {
+		return nil, err
+	}
+	return t.base.RoundTrip(req)
+}
+
+func validateReadOnlyMethod(method string) error {
+	if method != http.MethodGet && method != http.MethodHead {
+		return fmt.Errorf("gmail read-only transport rejects HTTP method %s", method)
+	}
+	return nil
+}
+
 // Close releases resources held by the client.
 func (c *Client) Close() error {
 	// HTTP client doesn't need explicit closing
@@ -91,6 +111,9 @@ func (c *Client) Close() error {
 // request makes an HTTP request with rate limiting and retry logic.
 // bodyBytes can be nil for requests without a body.
 func (c *Client) request(ctx context.Context, op Operation, method, path string, bodyBytes []byte) ([]byte, error) {
+	if err := validateReadOnlyMethod(method); err != nil {
+		return nil, err
+	}
 	// Acquire rate limit tokens
 	if err := c.rateLimiter.Acquire(ctx, op); err != nil {
 		return nil, fmt.Errorf("rate limit: %w", err)
@@ -561,43 +584,6 @@ func mapLabelChanges(changes []historyLabelChangeJSON) []HistoryLabelChange {
 		}
 	}
 	return out
-}
-
-// TrashMessage moves a message to trash.
-func (c *Client) TrashMessage(ctx context.Context, messageID string) error {
-	path := fmt.Sprintf("/users/%s/messages/%s/trash", c.userID, messageID)
-	_, err := c.request(ctx, OpMessagesTrash, "POST", path, nil)
-	return err
-}
-
-// DeleteMessage permanently deletes a message.
-func (c *Client) DeleteMessage(ctx context.Context, messageID string) error {
-	path := fmt.Sprintf("/users/%s/messages/%s", c.userID, messageID)
-	_, err := c.request(ctx, OpMessagesDelete, "DELETE", path, nil)
-	return err
-}
-
-// BatchDeleteMessages permanently deletes multiple messages.
-func (c *Client) BatchDeleteMessages(ctx context.Context, messageIDs []string) error {
-	if len(messageIDs) == 0 {
-		return nil
-	}
-	if len(messageIDs) > 1000 {
-		return fmt.Errorf("batch delete limited to 1000 messages, got %d", len(messageIDs))
-	}
-
-	body := struct {
-		IDs []string `json:"ids"`
-	}{IDs: messageIDs}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal body: %w", err)
-	}
-
-	path := fmt.Sprintf("/users/%s/messages/batchDelete", c.userID)
-	_, err = c.request(ctx, OpMessagesBatchDelete, "POST", path, bodyBytes)
-	return err
 }
 
 // Ensure Client implements API interface.

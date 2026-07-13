@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -19,11 +18,10 @@ type ServiceAccountManager struct {
 	scopes  []string
 }
 
-// NewServiceAccountManager creates a manager from a service account JSON key file.
-func NewServiceAccountManager(keyPath string, scopes []string) (*ServiceAccountManager, error) {
-	if len(scopes) == 0 {
-		return nil, errors.New("service account requires at least one scope")
-	}
+// NewServiceAccountManager creates an exact-readonly Gmail manager from a
+// service account JSON key file.
+func NewServiceAccountManager(keyPath string) (*ServiceAccountManager, error) {
+	scopes := []string{ScopeGmailReadonly}
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(keyPath)
 		if err != nil {

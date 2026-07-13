@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/msgvault/internal/daemonclient"
 	"go.kenn.io/msgvault/internal/query"
 	"go.kenn.io/msgvault/internal/search"
+	"go.kenn.io/msgvault/internal/store"
 )
 
 var (
@@ -20,7 +20,7 @@ var (
 	searchJSON         bool
 	searchAccount      string
 	searchCollection   string
-	searchMode         string
+	searchMode         = "fts"
 	searchExplain      bool
 	searchMessageTypes []string
 )
@@ -28,11 +28,7 @@ var (
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search messages using Gmail-like query syntax",
-	Long: `Search your email archive using Gmail-like query syntax.
-
-Uses the configured remote server when [remote].url is set; otherwise uses
-the local daemon for FTS search. Use --local to use the local daemon even
-when a remote is configured.
+	Long: `Search your local email archive using Gmail-like query syntax.
 
 Supported operators:
   from:        Sender email address
@@ -67,8 +63,8 @@ Examples:
 		}
 
 		// Validate mode before any scope work so we fail fast on a typo.
-		if searchMode != "fts" && searchMode != "vector" && searchMode != "hybrid" {
-			return usageErr(cmd, fmt.Errorf("invalid --mode: %q (want fts|vector|hybrid)", searchMode))
+		if searchMode != "fts" {
+			return usageErr(cmd, fmt.Errorf("invalid --mode: %q (only fts is supported)", searchMode))
 		}
 
 		// Validate --message-type against the known set, like --mode, so a
@@ -104,116 +100,37 @@ Examples:
 				return errors.New("empty search query")
 			}
 		}
-		if searchMode == "fts" {
-			return runHTTPSearch(cmd, queryStr)
-		}
-		if searchMode != "fts" && searchOffset > 0 {
-			return usageErr(cmd, fmt.Errorf("--offset is not supported with --mode=%s (pagination is single-page)", searchMode))
-		}
-		// Vector and hybrid modes need free-text terms to embed; both
-		// an empty raw query and a filter-only query (e.g. `from:alice`)
-		// would fail at the embed call. Check both up front and surface
-		// a CLI error rather than a late engine-level one. FTS still
-		// allows scoped queryless searches.
-		if searchMode != "fts" {
-			if queryStr == "" {
-				return usageErr(cmd, fmt.Errorf("--mode=%s requires query text to embed; pass a query or use --mode=fts", searchMode))
-			}
-			if len(search.Parse(queryStr).TextTerms) == 0 {
-				return usageErr(cmd, fmt.Errorf("--mode=%s requires free-text terms to embed; %q parsed to filters only — add a search phrase or use --mode=fts", searchMode, queryStr))
-			}
-		}
-
-		return runHybridSearch(cmd, queryStr, searchMode, searchExplain)
+		return runHTTPSearch(cmd, queryStr)
 	},
 }
 
 func runHTTPSearch(cmd *cobra.Command, queryStr string) error {
-	s, info, err := OpenHTTPStore(cmd.Context())
+	if searchAccount != "" || searchCollection != "" {
+		return errors.New("account and collection scopes were removed; msgvault-lite uses one local Gmail archive")
+	}
+	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	prefix := "Searching..."
-	if info.Kind == HTTPStoreConfiguredRemote {
-		prefix = fmt.Sprintf("Searching %s...", info.URL)
-	}
-	stopStatus := startSearchStatus(cmd.Context(), prefix, info)
-
-	hasAccount := searchAccount != "" || searchCollection != ""
-	logger.Info("search start",
-		"query_len", len(queryStr),
-		"has_account", hasAccount,
-		"limit", searchLimit,
-		"offset", searchOffset,
+	parsed := search.Parse(queryStr)
+	parsed.MessageTypes = append(parsed.MessageTypes, searchMessageTypes...)
+	results, err := query.NewSQLiteEngine(s.DB()).Search(
+		cmd.Context(), parsed, searchLimit, searchOffset,
 	)
-	logger.Debug("search start detail",
-		"query", queryStr,
-		"account", searchAccount,
-		"collection", searchCollection,
-	)
-	started := time.Now()
-
-	resp, err := s.GetCLISearch(cmd.Context(), daemonclient.CLISearchRequest{
-		Query:        queryStr,
-		Account:      searchAccount,
-		Collection:   searchCollection,
-		MessageTypes: searchMessageTypes,
-		Limit:        searchLimit,
-		Offset:       searchOffset,
-	})
-	stopStatus()
 	if err != nil {
-		logger.Warn("search failed",
-			"query_len", len(queryStr),
-			"duration_ms", time.Since(started).Milliseconds(),
-			"error", err.Error(),
-		)
 		return query.HintRepairEncoding(fmt.Errorf("search: %w", err))
 	}
-	if resp.IndexBuilt {
-		// Pre-0.18 daemons built the index synchronously inside the request.
-		fmt.Fprintf(os.Stderr, "Built search index (%d messages indexed).\n", resp.IndexedMessages)
-	}
-	switch resp.IndexState {
-	case "building":
-		fmt.Fprintln(os.Stderr,
-			"Note: the search index is being rebuilt in the background; results may be incomplete until it finishes.")
-	case "checking":
-		fmt.Fprintln(os.Stderr,
-			"Note: search index completeness is still being verified in the background; results may be incomplete until it finishes.")
-	}
-	if searchCollection != "" {
-		label := resp.ScopeLabel
-		if label == "" {
-			label = searchCollection
-		}
-		n := resp.ScopeSourceCount
-		suffix := "s"
-		if n == 1 {
-			suffix = ""
-		}
-		fmt.Fprintf(os.Stderr,
-			"Searching collection %q (%d account%s)\n",
-			label, n, suffix,
-		)
-	}
-	logger.Info("search done",
-		"query_len", len(queryStr),
-		"has_account", hasAccount,
-		"results", len(resp.Results),
-		"duration_ms", time.Since(started).Milliseconds(),
-	)
 
-	if len(resp.Results) == 0 {
+	if len(results) == 0 {
 		fmt.Println("No messages found.")
 		return nil
 	}
 	if searchJSON {
-		return outputSearchResultsJSON(resp.Results)
+		return outputSearchResultsJSON(results)
 	}
-	return outputSearchResultsTable(resp.Results)
+	return outputSearchResultsTable(results)
 }
 
 // nil error return mirrors outputSearchResultsJSON so callers can return
@@ -275,12 +192,4 @@ func init() {
 	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 50, "Maximum number of results")
 	searchCmd.Flags().IntVar(&searchOffset, "offset", 0, "Skip first N results")
 	searchCmd.Flags().BoolVar(&searchJSON, flagJSON, false, "Output as JSON")
-	searchCmd.Flags().StringVar(&searchAccount, "account", "", "Limit results to a specific account (email address)")
-	searchCmd.Flags().StringVar(&searchCollection, "collection", "",
-		"Limit results to all member accounts of one collection")
-	searchCmd.MarkFlagsMutuallyExclusive("account", "collection")
-	searchCmd.Flags().StringVar(&searchMode, "mode", "fts", "Search mode: fts|vector|hybrid")
-	searchCmd.Flags().BoolVar(&searchExplain, "explain", false, "Include per-signal scores in output (hybrid/vector modes)")
-	searchCmd.Flags().StringSliceVar(&searchMessageTypes, "message-type", nil,
-		"Limit results to message type(s), e.g. email, sms, calendar_event")
 }

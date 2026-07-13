@@ -364,56 +364,107 @@ func (s *Store) ListSyncRunItems(syncRunID int64, status string, limit int) ([]S
 
 // CompleteSync marks a sync as successfully completed.
 func (s *Store) CompleteSync(syncID int64, finalHistoryID string) error {
-	_, err := s.db.Exec(fmt.Sprintf(`
+	result, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE sync_runs
 		SET status = 'completed',
 		    completed_at = %s,
 		    cursor_after = ?
-		WHERE id = ?
+		WHERE id = ? AND status = 'running'
 	`, s.dialect.Now()), finalHistoryID, syncID)
-	return err
-}
-
-// CommitIncrementalSync atomically advances a source cursor and marks its sync
-// run complete. A failure in either update leaves both records unchanged.
-func (s *Store) CommitIncrementalSync(sourceID, syncID int64, finalHistoryID string) error {
-	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin incremental sync commit: %w", err)
+		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := s.dialect.Now()
-	if _, err := tx.Exec(fmt.Sprintf(`
-		UPDATE sources
-		SET sync_cursor = ?, last_sync_at = %s, updated_at = %s
-		WHERE id = ?
-	`, now, now), finalHistoryID, sourceID); err != nil {
-		return fmt.Errorf("update source cursor: %w", err)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count completed sync rows: %w", err)
 	}
-	if _, err := tx.Exec(fmt.Sprintf(`
-		UPDATE sync_runs
-		SET status = 'completed',
-		    completed_at = %s,
-		    cursor_after = ?
-		WHERE id = ?
-	`, now), finalHistoryID, syncID); err != nil {
-		return fmt.Errorf("complete sync run: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit incremental sync transaction: %w", err)
+	if rowsAffected != 1 {
+		return fmt.Errorf("complete running sync run %d: expected 1 row, updated %d", syncID, rowsAffected)
 	}
 	return nil
 }
 
-// FailSync marks a sync as failed with an error message.
+// CommitSync atomically advances a source cursor and marks its sync run
+// complete. A failure in either update leaves both records unchanged.
+func (s *Store) CommitSync(sourceID, syncID int64, finalHistoryID string) error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open sync commit connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, s.dialect.BeginWriteSQL()); err != nil {
+		return fmt.Errorf("begin sync commit: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	now := s.dialect.Now()
+	rebind := s.dialect.Rebind
+	var lockedSourceID int64
+	if err := conn.QueryRowContext(ctx,
+		rebind(`SELECT id FROM sources WHERE id = ?`+s.dialect.SelectForUpdate()),
+		sourceID,
+	).Scan(&lockedSourceID); err != nil {
+		return fmt.Errorf("lock incremental sync source: %w", err)
+	}
+
+	result, err := conn.ExecContext(ctx, rebind(fmt.Sprintf(`
+		UPDATE sync_runs
+		SET status = 'completed',
+		    completed_at = %s,
+		    cursor_after = ?
+		WHERE id = ? AND source_id = ? AND status = 'running'
+	`, now)), finalHistoryID, syncID, sourceID)
+	if err != nil {
+		return fmt.Errorf("complete sync run: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count completed sync runs: %w", err)
+	}
+	if updated != 1 {
+		return fmt.Errorf(
+			"complete sync run: sync %d is not the current running sync for source %d",
+			syncID, sourceID,
+		)
+	}
+
+	result, err = conn.ExecContext(ctx, rebind(fmt.Sprintf(`
+		UPDATE sources
+		SET sync_cursor = ?, last_sync_at = %s, updated_at = %s
+		WHERE id = ?
+	`, now, now)), finalHistoryID, sourceID)
+	if err != nil {
+		return fmt.Errorf("update source cursor: %w", err)
+	}
+	updated, err = result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count updated source cursors: %w", err)
+	}
+	if updated != 1 {
+		return fmt.Errorf("update source cursor: source %d does not exist", sourceID)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit sync transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// FailSync marks a running sync as failed with an error message. Completed and
+// already-failed runs are terminal and must not be rewritten by late cleanup.
 func (s *Store) FailSync(syncID int64, errMsg string) error {
 	_, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE sync_runs
 		SET status = 'failed',
 		    completed_at = %s,
 		    error_message = ?
-		WHERE id = ?
+		WHERE id = ? AND status = 'running'
 	`, s.dialect.Now()), errMsg, syncID)
 	return err
 }

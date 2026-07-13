@@ -26,38 +26,13 @@ import (
 	"golang.org/x/oauth2/google"
 )
 
-// Scopes for normal msgvault operations (sync, search, read).
-var Scopes = []string{
-	"https://www.googleapis.com/auth/gmail.readonly",
-	"https://www.googleapis.com/auth/gmail.modify",
-}
+// ScopeGmailReadonly is the only Gmail permission required to archive mail.
+const ScopeGmailReadonly = "https://www.googleapis.com/auth/gmail.readonly"
 
-// ScopesDeletion includes full access required for batchDelete API.
-// gmail.modify supports trash/untrash but NOT batchDelete.
-var ScopesDeletion = []string{
-	"https://mail.google.com/",
-}
-
-// ScopeCalendarReadonly is the read-only Calendar scope: it covers both
-// calendarList enumeration and event reads, so an archival tool needs nothing
-// finer-grained.
-const ScopeCalendarReadonly = "https://www.googleapis.com/auth/calendar.readonly"
-
-// ScopesCalendar is the opt-in scope set for calendar sync.
-var ScopesCalendar = []string{
-	ScopeCalendarReadonly,
-}
-
-// ScopesGmailCalendar bundles the normal Gmail scopes with Calendar for
-// re-consent. Re-authorizing uses ApprovalForce with no include_granted_scopes,
-// which REPLACES (not unions) the granted scope set — so an existing Gmail
-// account opting into calendar must re-consent with BOTH scope families or it
-// silently loses Gmail access. Always pass this bundle (never ScopesCalendar
-// alone) when escalating an account that already has Gmail.
-var ScopesGmailCalendar = append(append([]string{}, Scopes...), ScopesCalendar...)
+// Scopes is the exact grant requested for normal msgvault operations.
+var Scopes = []string{ScopeGmailReadonly}
 
 const defaultProfileURL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
-const defaultCalendarProfileURL = "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary"
 
 // TokenMismatchError is returned when the authorized Google account
 // does not match the expected email. Callers can inspect Expected
@@ -89,7 +64,25 @@ type Manager struct {
 
 // NewManager creates an OAuth manager from client secrets.
 func NewManager(clientSecretsPath, tokensDir string, logger *slog.Logger) (*Manager, error) {
-	return NewManagerWithScopes(clientSecretsPath, tokensDir, logger, Scopes)
+	data, err := os.ReadFile(clientSecretsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read client secrets: %w", err)
+	}
+
+	config, err := parseClientSecrets(data, Scopes)
+	if err != nil {
+		return nil, fmt.Errorf("parse client secrets: %w", err)
+	}
+
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return &Manager{
+		config:    config,
+		tokensDir: tokensDir,
+		logger:    logger,
+	}, nil
 }
 
 // TokenSource returns a token source for the given email.
@@ -98,6 +91,12 @@ func (m *Manager) TokenSource(ctx context.Context, email string) (oauth2.TokenSo
 	tf, err := m.loadTokenFile(email)
 	if err != nil {
 		return nil, fmt.Errorf("no valid token for %s: %w", email, err)
+	}
+	if err := validateExactDefaultScopes(tf.Scopes, m.config.Scopes); err != nil {
+		return nil, fmt.Errorf("token for %s: %w", email, err)
+	}
+	if err := validateTokenClient(tf.ClientID, m.config.ClientID); err != nil {
+		return nil, fmt.Errorf("token for %s: %w", email, err)
 	}
 
 	// Create a token source that auto-refreshes
@@ -140,6 +139,12 @@ func (m *Manager) ForceRefresh(ctx context.Context, email string) error {
 	tf, err := m.loadTokenFile(email)
 	if err != nil {
 		return fmt.Errorf("no valid token for %s: %w", email, err)
+	}
+	if err := validateExactDefaultScopes(tf.Scopes, m.config.Scopes); err != nil {
+		return fmt.Errorf("token for %s: %w", email, err)
+	}
+	if err := validateTokenClient(tf.ClientID, m.config.ClientID); err != nil {
+		return fmt.Errorf("token for %s: %w", email, err)
 	}
 	if tf.RefreshToken == "" {
 		return fmt.Errorf("token for %s has no refresh token", email)
@@ -293,45 +298,7 @@ func (m *Manager) AuthorizeManual(ctx context.Context, email string) error {
 	return m.authorize(ctx, email, false)
 }
 
-// AuthorizeManualPreservingGrantedScopes reauthorizes with the manager's
-// required scopes plus any scopes already recorded on the token file.
-func (m *Manager) AuthorizeManualPreservingGrantedScopes(ctx context.Context, email string) error {
-	scoped := m.withScopes(scopesWithPreservedGrants(m.config.Scopes, m.GrantedScopes(email)))
-	return scoped.AuthorizeManual(ctx, email)
-}
-
-// AuthorizePreservingGrantedScopes is the browser twin of
-// AuthorizeManualPreservingGrantedScopes: it opens the browser and reauthorizes
-// with the manager's required scopes plus any scopes already recorded on the
-// token file. Google's forced consent REPLACES the granted scope set, so
-// re-authorizing with the bare required scopes would silently drop previously
-// granted grants (Calendar, permanent-delete); the union preserves them.
-func (m *Manager) AuthorizePreservingGrantedScopes(ctx context.Context, email string) error {
-	scoped := m.withScopes(scopesWithPreservedGrants(m.config.Scopes, m.GrantedScopes(email)))
-	return scoped.Authorize(ctx, email)
-}
-
-func (m *Manager) withScopes(scopes []string) *Manager {
-	scoped := *m
-	config := *m.config
-	config.Scopes = normalizedScopeList(scopes)
-	scoped.config = &config
-	return &scoped
-}
-
-func scopesWithPreservedGrants(required, granted []string) []string {
-	scopes := append([]string(nil), required...)
-	for _, scope := range granted {
-		if !slices.Contains(scopes, scope) {
-			scopes = append(scopes, scope)
-		}
-	}
-	return normalizedScopeList(scopes)
-}
-
-func (m *Manager) authorize(
-	ctx context.Context, email string, launchBrowser bool,
-) error {
+func (m *Manager) authorize(ctx context.Context, email string, launchBrowser bool) error {
 	flow := m.browserFlow
 	if m.browserFlowFn != nil {
 		flow = m.browserFlowFn
@@ -353,6 +320,9 @@ func (m *Manager) authorize(
 	grantedScopes := grantedScopesFromToken(token, m.config.Scopes)
 	if missing := missingScopes(m.config.Scopes, grantedScopes); len(missing) > 0 {
 		return fmt.Errorf("authorized token missing required OAuth scopes: %s", strings.Join(missing, ", "))
+	}
+	if err := validateExactDefaultScopes(grantedScopes, m.config.Scopes); err != nil {
+		return fmt.Errorf("authorized token: %w", err)
 	}
 
 	return m.saveToken(email, token, grantedScopes)
@@ -472,7 +442,10 @@ const resolveTimeout = 10 * time.Second
 func (m *Manager) resolveTokenEmail(
 	ctx context.Context, email string, token *oauth2.Token,
 ) (string, error) {
-	endpoint := tokenProfileEndpointForScopes(m.config.Scopes)
+	endpoint := tokenProfileEndpoint{
+		url:         defaultProfileURL,
+		serviceName: "Gmail API",
+	}
 	if m.profileURL != "" {
 		endpoint.url = m.profileURL
 	}
@@ -483,31 +456,6 @@ func (m *Manager) resolveTokenEmail(
 type tokenProfileEndpoint struct {
 	url         string
 	serviceName string
-}
-
-func tokenProfileEndpointForScopes(scopes []string) tokenProfileEndpoint {
-	if slices.Contains(scopes, ScopeCalendarReadonly) && !hasGmailProfileScope(scopes) {
-		return tokenProfileEndpoint{
-			url:         defaultCalendarProfileURL,
-			serviceName: "Calendar API",
-		}
-	}
-	return tokenProfileEndpoint{
-		url:         defaultProfileURL,
-		serviceName: "Gmail API",
-	}
-}
-
-func hasGmailProfileScope(scopes []string) bool {
-	if slices.Contains(scopes, "https://mail.google.com/") {
-		return true
-	}
-	for _, scope := range Scopes {
-		if slices.Contains(scopes, scope) {
-			return true
-		}
-	}
-	return false
 }
 
 func grantedScopesFromToken(token *oauth2.Token, requested []string) []string {
@@ -559,6 +507,18 @@ func missingScopes(required, granted []string) []string {
 		}
 	}
 	return missing
+}
+
+func validateExactDefaultScopes(granted, requested []string) error {
+	requested = normalizedScopeList(requested)
+	if len(requested) != 1 || requested[0] != ScopeGmailReadonly {
+		return nil
+	}
+	granted = normalizedScopeList(granted)
+	if len(granted) == 1 && granted[0] == ScopeGmailReadonly {
+		return nil
+	}
+	return errors.New("OAuth grant does not have the exact OAuth scopes required by msgvault-lite; reauthorize with gmail.readonly")
 }
 
 // sameGoogleAccount returns true if two email addresses belong to the
@@ -665,6 +625,16 @@ func (m *Manager) TokenMatchesClient(email string) bool {
 	return tf.ClientID == m.config.ClientID
 }
 
+func validateTokenClient(stored, configured string) error {
+	if stored == "" {
+		return errors.New("token has no OAuth client metadata; reauthorize it")
+	}
+	if stored != configured {
+		return errors.New("token was minted by a different OAuth client; reauthorize it")
+	}
+	return nil
+}
+
 // HasScopeMetadata returns true if the token file for this account has any
 // scope metadata stored. Legacy tokens (saved before scope tracking) return false.
 func (m *Manager) HasScopeMetadata(email string) bool {
@@ -698,6 +668,9 @@ func (m *Manager) GrantedScopes(email string) []string {
 
 // saveToken saves a token for the given email with the specified scopes.
 func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) error {
+	if err := validateExactDefaultScopes(scopes, Scopes); err != nil {
+		return fmt.Errorf("refuse to save token: %w", err)
+	}
 	if err := fileutil.SecureMkdirAll(m.tokensDir, 0700); err != nil {
 		return err
 	}
@@ -854,29 +827,6 @@ func openBrowser(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("start browser command: %w", err)
 	}
 	return nil
-}
-
-// NewManagerWithScopes creates an OAuth manager with custom scopes.
-func NewManagerWithScopes(clientSecretsPath, tokensDir string, logger *slog.Logger, scopes []string) (*Manager, error) {
-	data, err := os.ReadFile(clientSecretsPath)
-	if err != nil {
-		return nil, fmt.Errorf("read client secrets: %w", err)
-	}
-
-	config, err := parseClientSecrets(data, scopes)
-	if err != nil {
-		return nil, fmt.Errorf("parse client secrets: %w", err)
-	}
-
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	return &Manager{
-		config:    config,
-		tokensDir: tokensDir,
-		logger:    logger,
-	}, nil
 }
 
 // parseClientSecrets parses Google OAuth client secrets JSON.

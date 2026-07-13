@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/backup"
 	"go.kenn.io/msgvault/internal/backupapp"
-	"go.kenn.io/msgvault/internal/daemonclient"
 )
 
 var (
@@ -213,9 +212,11 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("opening backup repository: %w", err)
 	}
-	if err := refuseRestoreIntoLiveDaemonHome(backupRestoreTarget); err != nil {
+	releaseTarget, err := acquireRestoreTargetLock(backupRestoreTarget)
+	if err != nil {
 		return err
 	}
+	defer releaseTarget()
 	var snapshotID string
 	if len(args) > 0 {
 		snapshotID = args[0]
@@ -245,37 +246,33 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// refuseRestoreIntoLiveDaemonHome rejects a restore target that is the
-// configured archive home while a daemon is running there — the daemon owns
-// that SQLite database, and writing under it would corrupt a live archive
-// (docs/architecture/backup-format.md, Restore). Any responding daemon
-// counts, including one whose API version is incompatible with this client
-// (left running across an upgrade or downgrade) — it owns the database all
-// the same. A stopped daemon's home is still non-empty and so requires
-// --overwrite like any other directory. Target and home are compared as
-// filesystem objects, not path strings, so a case-variant or symlinked
-// spelling of the home is refused too.
-func refuseRestoreIntoLiveDaemonHome(target string) error {
+// acquireRestoreTargetLock serializes a restore into the configured archive
+// with sync, imports, repair commands, and backup snapshot establishment.
+// Restores elsewhere need no archive-owner lock.
+func acquireRestoreTargetLock(target string) (func(), error) {
+	live, err := restoreTargetsLiveArchive(target)
+	if err != nil {
+		return nil, err
+	}
+	if !live {
+		return func() {}, nil
+	}
+	return acquireDirectSQLiteWriteLock(cfg)
+}
+
+func restoreTargetsLiveArchive(target string) (bool, error) {
 	if cfg == nil || target == "" || cfg.Data.DataDir == "" {
-		return nil
+		return false, nil
 	}
 	targetAbs, err := filepath.Abs(target)
 	if err != nil {
-		return fmt.Errorf("backup restore: resolving target %q: %w", target, err)
+		return false, fmt.Errorf("backup restore: resolving target %q: %w", target, err)
 	}
 	homeAbs, err := filepath.Abs(cfg.Data.DataDir)
 	if err != nil {
-		return fmt.Errorf("backup restore: resolving data dir %q: %w", cfg.Data.DataDir, err)
+		return false, fmt.Errorf("backup restore: resolving data dir %q: %w", cfg.Data.DataDir, err)
 	}
-	if targetAbs != homeAbs && !sameExistingPath(targetAbs, homeAbs) {
-		return nil
-	}
-	if rt := findAnyDaemonRuntime(cfg.Data.DataDir); rt != nil {
-		return fmt.Errorf(
-			"backup restore: target %s is the live archive home of a running daemon; stop the daemon first (msgvault daemon stop) or restore elsewhere",
-			target)
-	}
-	return nil
+	return targetAbs == homeAbs || sameExistingPath(targetAbs, homeAbs), nil
 }
 
 // sameExistingPath reports whether a and b name the same existing filesystem
@@ -296,22 +293,7 @@ func sameExistingPath(a, b string) bool {
 	return os.SameFile(aInfo, bInfo)
 }
 
-// runBackupCreate is dual-mode like verify.go's RunE: outside the daemon CLI
-// subprocess it proxies the invocation through the daemon (which re-spawns
-// this same command inside the subprocess, forwarding every set flag
-// verbatim); inside the subprocess it runs the capture locally, bracketed by
-// a freeze window held on the parent daemon.
-func runBackupCreate(cmd *cobra.Command, args []string) error {
-	if !isDaemonCLISubprocess() {
-		// The subprocess's own stdout is a pipe back to the daemon, never a
-		// real terminal, so its own auto-detection would always fall back to
-		// plain. Resolve "auto" here, using the client's own terminal, and
-		// forward the resolved value explicitly.
-		if err := resolveClientBackupProgressFlag(cmd); err != nil {
-			return err
-		}
-		return runDaemonCLICommandHTTPFromCobra(cmd, args)
-	}
+func runBackupCreate(cmd *cobra.Command, _ []string) error {
 	return runBackupCreateLocal(cmd)
 }
 
@@ -335,7 +317,7 @@ func backupExtrasSpec() (backup.ExtrasSpec, error) {
 		return backup.ExtrasSpec{}, fmt.Errorf(
 			"%s requires an encrypted repository (use --allow-plaintext-secrets to override)", flag)
 	}
-	spec := backup.ExtrasSpec{Dirs: []backup.ExtrasDirSpec{{Name: "deletions"}}}
+	spec := backup.ExtrasSpec{}
 	if backupCreateIncludeConfig {
 		if cfgPath := cfg.ConfigFilePath(); cfgPath != "" {
 			spec.Files = append(spec.Files, backup.ExtrasFileSpec{
@@ -417,46 +399,38 @@ func runBackupCreateLocal(cmd *cobra.Command) error {
 	return nil
 }
 
-// newBackupFreezer resolves the parent daemon's runtime record and builds a
-// freezeViaDaemon coordinator over it. backup create must never scan a
-// live-daemon-owned SQLite file unfrozen, so a daemon that cannot be
-// resolved here is a hard failure rather than a silent unfrozen fallback.
+// newBackupFreezer blocks concurrent direct writers while the backup engine
+// takes its SQLite snapshot and captures archive files.
 func newBackupFreezer() (backup.FreezeCoordinator, func(), error) {
-	rt := findDaemonRuntime(cfg.Data.DataDir)
-	if rt == nil {
-		return nil, func() {}, errors.New(
-			"backup create: no running msgvault daemon found; refusing to back up an unfrozen archive")
-	}
-	client, err := daemonclient.New(daemonclient.Config{
-		URL:           urlFromDaemonRuntime(rt),
-		APIKey:        cfg.Server.APIKey,
-		AllowInsecure: true,
-	})
-	if err != nil {
-		return nil, func() {}, fmt.Errorf("backup create: connecting to daemon: %w", err)
-	}
-	return &freezeViaDaemon{client: client}, func() { _ = client.Close() }, nil
+	return &directBackupFreezer{}, func() {}, nil
 }
 
-// freezeViaDaemon implements backup.FreezeCoordinator by brokering the
-// freeze window through the parent daemon's HTTP API: Begin opens the
-// window and holds the returned token, End closes it with that token.
-type freezeViaDaemon struct {
-	client *daemonclient.Client
-	token  string
+type directBackupFreezer struct {
+	release func()
 }
 
-func (f *freezeViaDaemon) Begin(ctx context.Context) error {
-	token, err := f.client.BackupFreezeBegin(ctx)
+func (f *directBackupFreezer) Begin(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if f.release != nil {
+		return errors.New("backup freeze already active")
+	}
+	release, err := acquireDirectSQLiteWriteLock(cfg)
 	if err != nil {
 		return err
 	}
-	f.token = token
+	f.release = release
 	return nil
 }
 
-func (f *freezeViaDaemon) End(ctx context.Context) error {
-	return f.client.BackupFreezeEnd(ctx, f.token)
+func (f *directBackupFreezer) End(context.Context) error {
+	if f.release == nil {
+		return errors.New("backup freeze is not active")
+	}
+	f.release()
+	f.release = nil
+	return nil
 }
 
 func init() {

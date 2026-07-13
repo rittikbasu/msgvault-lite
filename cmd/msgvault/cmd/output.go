@@ -135,8 +135,19 @@ func formatSize(bytes int64) string {
 	}
 }
 
+func formatCount(value int64) string {
+	return fmt.Sprintf("%d", value)
+}
+
 func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }

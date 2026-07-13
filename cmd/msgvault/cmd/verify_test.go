@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/msgvault/internal/config"
 )
 
 // TestIsFTSIntegrityError_Classification verifies that the hint-classifier
@@ -152,4 +157,18 @@ func TestNewVerifyResult(t *testing.T) {
 			assert.Equal(tc.interrupted, got.SampleInterrupted)
 		})
 	}
+}
+
+func TestVerifyDoesNotCreateMissingArchive(t *testing.T) {
+	tmpDir := t.TempDir()
+	savedCfg := cfg
+	cfg = &config.Config{HomeDir: tmpDir, Data: config.DataConfig{DataDir: tmpDir}}
+	t.Cleanup(func() { cfg = savedCfg })
+
+	err := runVerifyLocal(&cobra.Command{}, []string{"user@gmail.com"})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "open database read-only")
+
+	_, statErr := os.Stat(filepath.Join(tmpDir, "msgvault.db"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }

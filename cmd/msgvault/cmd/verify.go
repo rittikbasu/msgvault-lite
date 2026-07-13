@@ -96,21 +96,12 @@ Examples:
   msgvault verify you@gmail.com --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if isDaemonCLISubprocess() {
-			return runVerifyLocal(cmd, args)
-		}
-		return runVerifyHTTP(cmd, args[0])
+		return runVerifyLocal(cmd, args)
 	},
 }
 
 func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	email := args[0]
-
-	release, err := acquireDirectSQLiteWriteLock(cfg)
-	if err != nil {
-		return err
-	}
-	defer release()
 
 	// In --json mode, suppress all human-readable progress so stdout
 	// carries only the final JSON object. Failures still surface as
@@ -126,20 +117,13 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Open database
+	// Verification must never initialize or migrate the archive.
 	dbPath := cfg.DatabaseDSN()
-	s, err := store.Open(dbPath)
+	s, err := store.OpenReadOnly(dbPath)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return fmt.Errorf("open database read-only: %w", err)
 	}
 	defer func() { _ = s.Close() }()
-
-	if err := s.InitSchema(); err != nil {
-		return fmt.Errorf("init schema: %w", err)
-	}
-	if err := runStartupMigrations(s); err != nil {
-		return fmt.Errorf("startup migrations: %w", err)
-	}
 
 	// Run SQLite integrity check before any Gmail work. Users with a
 	// corrupt database should see the repair hint even if their OAuth
@@ -215,7 +199,7 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	// the stored refresh token (and may prompt for re-auth in TTY).
 	var tokenSource oauth2.TokenSource
 	if saKeyPath := cfg.OAuth.ServiceAccountKeyFor(appName); saKeyPath != "" {
-		saMgr, saErr := oauth.NewServiceAccountManager(saKeyPath, oauth.Scopes)
+		saMgr, saErr := oauth.NewServiceAccountManager(saKeyPath)
 		if saErr != nil {
 			return fmt.Errorf("service account: %w", saErr)
 		}

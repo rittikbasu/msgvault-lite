@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -157,108 +156,4 @@ func (s *Store) GetSourcesByTypeAndAccount(sourceType, accountEmail string) ([]*
 		}
 	}
 	return matched, nil
-}
-
-// RemoveSource deletes a source and all its associated data.
-// FTS5 rows are cleaned up explicitly (no FK cascade for virtual tables).
-// CASCADE handles conversations, messages, labels, attachments, sync state.
-// Orphaned participants are left for a future `gc` command.
-//
-// Runs under runMaintenance: the cascade DELETE removes millions of rows
-// across messages/recipients/labels/bodies/raw on a large archive and the
-// FTSDelete rewrites every matching tsvector, so the maintenance hatch
-// disables the pool-wide 30s statement_timeout for this tx (finding S1).
-// No-op timeout reset on SQLite.
-func (s *Store) RemoveSource(sourceID int64) error {
-	return s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		return s.removeSourceExec(tx, sourceID)
-	})
-}
-
-// RemoveSourceSerialized deletes a source while holding an exclusive write
-// lock, and reports whether any sync was running at the moment the lock was
-// acquired. Callers use hadActiveSync to gate follow-up operations (such as
-// attachment file deletion) that must not race with a sync worker.
-//
-// Running the active-sync check and the cascade in the same transaction
-// closes the race where a sync starts between a pre-check and RemoveSource:
-// StartSync blocks on our exclusive lock, so either (a) it committed before
-// us and we observe the running row, or (b) it has not yet started and will
-// fail after we commit because the source is gone.
-func (s *Store) RemoveSourceSerialized(
-	ctx context.Context, sourceID int64,
-) (hadActiveSync bool, err error) {
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return false, fmt.Errorf("acquire connection: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	if err := s.dialect.BeginExclusive(ctx, conn); err != nil {
-		return false, fmt.Errorf("begin exclusive: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(ctx, "ROLLBACK")
-		}
-	}()
-
-	var count int
-	if err := conn.QueryRowContext(ctx,
-		s.dialect.Rebind(`SELECT COUNT(*) FROM sync_runs WHERE status = 'running'`),
-	).Scan(&count); err != nil {
-		return false, fmt.Errorf("check active syncs: %w", err)
-	}
-	hadActiveSync = count > 0
-
-	if s.fts5Available {
-		if _, err := conn.ExecContext(
-			ctx, s.dialect.FTSDeleteSQL(), sourceID,
-		); err != nil {
-			return hadActiveSync, fmt.Errorf("delete FTS rows: %w", err)
-		}
-	}
-
-	res, err := conn.ExecContext(
-		ctx, s.dialect.Rebind(`DELETE FROM sources WHERE id = ?`), sourceID,
-	)
-	if err != nil {
-		return hadActiveSync, fmt.Errorf("delete source: %w", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return hadActiveSync, fmt.Errorf("check rows affected: %w", err)
-	}
-	if rows == 0 {
-		return hadActiveSync, fmt.Errorf("source %d not found", sourceID)
-	}
-
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return hadActiveSync, fmt.Errorf("commit: %w", err)
-	}
-	committed = true
-	return hadActiveSync, nil
-}
-
-// removeSourceExec performs the FTS + sources DELETE on a generic executor
-// (either a *loggedTx or *sql.Conn under a manual transaction).
-func (s *Store) removeSourceExec(tx *loggedTx, sourceID int64) error {
-	if s.fts5Available {
-		if _, err := tx.Exec(s.dialect.FTSDeleteSQL(), sourceID); err != nil {
-			return fmt.Errorf("delete FTS rows: %w", err)
-		}
-	}
-	res, err := tx.Exec(`DELETE FROM sources WHERE id = ?`, sourceID)
-	if err != nil {
-		return fmt.Errorf("delete source: %w", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check rows affected: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("source %d not found", sourceID)
-	}
-	return nil
 }

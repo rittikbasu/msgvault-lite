@@ -158,20 +158,6 @@ func TestAddAccountIdentity_AllWhitespaceIdentifierIsNoOp(t *testing.T) {
 	assert.Empty(t, rows, "whitespace identifier should not insert")
 }
 
-func TestAccountIdentities_FKCascadeOnSourceDelete(t *testing.T) {
-	require := require.New(t)
-	f := storetest.New(t)
-	st := f.Store
-
-	require.NoError(st.AddAccountIdentity(f.Source.ID, "alice@example.com", "manual"))
-	require.NoError(st.RemoveSource(f.Source.ID))
-	var n int
-	require.NoError(st.DB().QueryRow(
-		st.Rebind(`SELECT COUNT(*) FROM account_identities WHERE source_id = ?`), f.Source.ID,
-	).Scan(&n))
-	assert.Equal(t, 0, n, "FK cascade failed: %d rows remain", n)
-}
-
 func TestGetIdentitiesForScope_MultiSource(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)

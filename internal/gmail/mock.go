@@ -47,9 +47,6 @@ type MockAPI struct {
 	LastQuery         string // Last query passed to ListMessages
 	GetMessageCalls   []string
 	HistoryCalls      []uint64
-	TrashCalls        []string
-	DeleteCalls       []string
-	BatchDeleteCalls  [][]string
 }
 
 // NewMockAPI creates a new mock API with empty state.
@@ -229,30 +226,6 @@ func (m *MockAPI) ListHistory(ctx context.Context, startHistoryID uint64, pageTo
 	}, nil
 }
 
-// TrashMessage records a trash call.
-func (m *MockAPI) TrashMessage(ctx context.Context, messageID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.TrashCalls = append(m.TrashCalls, messageID)
-	return nil
-}
-
-// DeleteMessage records a delete call.
-func (m *MockAPI) DeleteMessage(ctx context.Context, messageID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.DeleteCalls = append(m.DeleteCalls, messageID)
-	return nil
-}
-
-// BatchDeleteMessages records a batch delete call.
-func (m *MockAPI) BatchDeleteMessages(ctx context.Context, messageIDs []string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.BatchDeleteCalls = append(m.BatchDeleteCalls, messageIDs)
-	return nil
-}
-
 // Close is a no-op for the mock.
 func (m *MockAPI) Close() error {
 	return nil
@@ -326,9 +299,6 @@ func (m *MockAPI) Reset() {
 	m.LastQuery = ""
 	m.GetMessageCalls = nil
 	m.HistoryCalls = nil
-	m.TrashCalls = nil
-	m.DeleteCalls = nil
-	m.BatchDeleteCalls = nil
 }
 
 // Ensure MockAPI implements API interface.

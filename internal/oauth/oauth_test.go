@@ -27,21 +27,97 @@ func setupTestManager(t *testing.T, scopes []string) *Manager {
 	tokensDir := filepath.Join(dir, "tokens")
 	require.NoError(t, os.MkdirAll(tokensDir, 0700))
 	return &Manager{
-		config:    &oauth2.Config{Scopes: scopes},
+		config:    &oauth2.Config{ClientID: "test-client.apps.googleusercontent.com", Scopes: scopes},
 		tokensDir: tokensDir,
 		logger:    slog.Default(),
 	}
 }
 
+func TestDefaultScopesAreExactGmailReadonly(t *testing.T) {
+	assert.Equal(t,
+		[]string{"https://www.googleapis.com/auth/gmail.readonly"},
+		Scopes,
+		"default Gmail authorization must not request write-capable scopes",
+	)
+}
+
+func TestTokenSourceRequiresExactDefaultScopes(t *testing.T) {
+	tests := []struct {
+		name    string
+		scopes  []string
+		legacy  bool
+		wantErr bool
+	}{
+		{name: "exact readonly", scopes: []string{ScopeGmailReadonly}},
+		{name: "overprivileged", scopes: []string{ScopeGmailReadonly, "https://www.googleapis.com/auth/gmail.modify"}, wantErr: true},
+		{name: "missing metadata", legacy: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := setupTestManager(t, Scopes)
+			token := oauth2.Token{
+				AccessToken: "still-valid",
+				TokenType:   "Bearer",
+				Expiry:      time.Now().Add(time.Hour),
+			}
+			if tt.legacy {
+				writeLegacyTokenFile(t, mgr, "user@gmail.com", token)
+			} else {
+				writeTokenFile(t, mgr, "user@gmail.com", token, tt.scopes)
+			}
+
+			_, err := mgr.TokenSource(context.Background(), "user@gmail.com")
+			if tt.wantErr {
+				require.Error(t, err, "non-exact token must not be reusable")
+				assert.ErrorContains(t, err, "exact OAuth scopes")
+				return
+			}
+			require.NoError(t, err, "exact readonly token should be reusable")
+		})
+	}
+}
+
+func TestForceRefreshRequiresExactDefaultScopes(t *testing.T) {
+	mgr := setupTestManager(t, Scopes)
+	writeTokenFile(t, mgr, "user@gmail.com", oauth2.Token{
+		AccessToken:  "still-valid",
+		RefreshToken: "refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(time.Hour),
+	}, []string{ScopeGmailReadonly, "https://www.googleapis.com/auth/gmail.modify"})
+
+	err := mgr.ForceRefresh(context.Background(), "user@gmail.com")
+	require.Error(t, err, "overprivileged token must not be refreshed")
+	assert.ErrorContains(t, err, "exact OAuth scopes")
+}
+
 func writeTokenFile(t *testing.T, mgr *Manager, email string, token oauth2.Token, scopes []string) {
 	t.Helper()
 	tf := tokenFile{
-		Token:  token,
-		Scopes: scopes,
+		Token:    token,
+		Scopes:   scopes,
+		ClientID: mgr.config.ClientID,
 	}
 	data, err := json.Marshal(tf)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, email+".json"), data, 0600))
+}
+
+func TestTokenSourceRejectsWrongOAuthClient(t *testing.T) {
+	mgr := setupTestManager(t, Scopes)
+	tf := tokenFile{
+		Token:    oauth2.Token{AccessToken: "still-valid", Expiry: time.Now().Add(time.Hour)},
+		Scopes:   []string{ScopeGmailReadonly},
+		ClientID: "different-client.apps.googleusercontent.com",
+	}
+	data, err := json.Marshal(tf)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, "user@gmail.com.json"), data, 0600))
+
+	_, err = mgr.TokenSource(context.Background(), "user@gmail.com")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "different OAuth client")
 }
 
 func writeLegacyTokenFile(t *testing.T, mgr *Manager, email string, token oauth2.Token) {
@@ -127,7 +203,7 @@ func TestHasScope(t *testing.T) {
 func TestTokenFileScopesRoundTrip(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
-	mgr := setupTestManager(t, ScopesDeletion)
+	mgr := setupTestManager(t, Scopes)
 
 	token := &oauth2.Token{
 		AccessToken:  "access",
@@ -135,19 +211,37 @@ func TestTokenFileScopesRoundTrip(t *testing.T) {
 		TokenType:    "Bearer",
 	}
 
-	require.NoError(mgr.saveToken("test@gmail.com", token, ScopesDeletion))
+	require.NoError(mgr.saveToken("test@gmail.com", token, Scopes))
 
-	// Load and verify scopes were saved
+	// Load and verify scopes were saved.
 	tf, err := mgr.loadTokenFile("test@gmail.com")
 	require.NoError(err)
 
-	require.Len(tf.Scopes, 1, "expected ScopesDeletion")
-	assert.Equal("https://mail.google.com/", tf.Scopes[0], "scopes[0]")
+	assert.Equal([]string{ScopeGmailReadonly}, tf.Scopes)
 
 	// loadToken should still work (returns just the token)
 	loaded, err := mgr.loadToken("test@gmail.com")
 	require.NoError(err)
 	assert.Equal("access", loaded.AccessToken, "access token")
+}
+
+func TestSaveTokenRejectsNonReadonlyScopes(t *testing.T) {
+	tests := []struct {
+		name   string
+		scopes []string
+	}{
+		{name: "missing metadata"},
+		{name: "overprivileged", scopes: []string{ScopeGmailReadonly, "https://www.googleapis.com/auth/gmail.modify"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := setupTestManager(t, Scopes)
+			err := mgr.saveToken("test@gmail.com", &oauth2.Token{AccessToken: "unsafe"}, tt.scopes)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "exact OAuth scopes")
+			assert.False(t, mgr.HasToken("test@gmail.com"))
+		})
+	}
 }
 
 func TestSaveToken_OverwriteExisting(t *testing.T) {
@@ -582,36 +676,65 @@ func TestAuthorize_SavesUnderOriginalIdentifier(t *testing.T) {
 	assert.Error(err, "token should NOT exist under canonical %q", canonicalEmail)
 }
 
-func TestAuthorize_CalendarOnlyUsesCalendarProfileID(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-
-	srv := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal("Bearer calendar-token", r.Header.Get("Authorization"), "Authorization")
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"id":"user@gmail.com"}`)
-		}))
+func TestAuthorizeRejectsUnexpectedDefaultScopesWithoutSavingToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"emailAddress":"user@gmail.com"}`)
+	}))
 	defer srv.Close()
 
-	mgr := setupTestManager(t, ScopesCalendar)
+	mgr := setupTestManager(t, Scopes)
 	mgr.profileURL = srv.URL
 	mgr.browserFlowFn = func(
 		_ context.Context, _ string, _ bool,
 	) (*oauth2.Token, error) {
-		return &oauth2.Token{
-			AccessToken: "calendar-token",
+		return (&oauth2.Token{
+			AccessToken: "overprivileged-token",
 			TokenType:   "Bearer",
 			Expiry:      time.Now().Add(time.Hour),
-		}, nil
+		}).WithExtra(map[string]any{"scope": strings.Join([]string{
+			ScopeGmailReadonly,
+			"https://www.googleapis.com/auth/gmail.modify",
+		}, " ")}), nil
 	}
 
-	require.NoError(mgr.Authorize(context.Background(), "user@gmail.com"), "Authorize")
+	err := mgr.Authorize(context.Background(), "user@gmail.com")
+	require.Error(t, err, "Authorize must reject an overprivileged grant")
+	assert.ErrorContains(t, err, "exact OAuth scopes")
+	assert.False(t, mgr.HasToken("user@gmail.com"), "rejected token must not be persisted")
+}
 
-	loaded, err := mgr.loadTokenFile("user@gmail.com")
-	require.NoError(err, "loadTokenFile")
-	assert.Equal("calendar-token", loaded.AccessToken, "access token")
-	assert.ElementsMatch(ScopesCalendar, loaded.Scopes, "saved scopes")
+func TestAuthorizeRejectionPreservesExistingToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"emailAddress":"user@gmail.com"}`)
+	}))
+	defer srv.Close()
+
+	mgr := setupTestManager(t, Scopes)
+	mgr.profileURL = srv.URL
+	writeTokenFile(t, mgr, "user@gmail.com", oauth2.Token{
+		AccessToken:  "known-good",
+		RefreshToken: "known-refresh",
+		Expiry:       time.Now().Add(time.Hour),
+	}, Scopes)
+	mgr.browserFlowFn = func(
+		_ context.Context, _ string, _ bool,
+	) (*oauth2.Token, error) {
+		return (&oauth2.Token{AccessToken: "overprivileged"}).WithExtra(map[string]any{
+			"scope": ScopeGmailReadonly + " https://www.googleapis.com/auth/gmail.modify",
+		}), nil
+	}
+
+	err := mgr.Authorize(context.Background(), "user@gmail.com")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "exact OAuth scopes")
+
+	tf, err := mgr.loadTokenFile("user@gmail.com")
+	require.NoError(t, err)
+	assert.Equal(t, "known-good", tf.AccessToken)
+	assert.Equal(t, "known-refresh", tf.RefreshToken)
+	assert.Equal(t, mgr.config.ClientID, tf.ClientID)
 }
 
 func TestAuthorize_SavesActualGrantedScopesFromTokenResponse(t *testing.T) {
@@ -625,8 +748,8 @@ func TestAuthorize_SavesActualGrantedScopesFromTokenResponse(t *testing.T) {
 		}))
 	defer srv.Close()
 
-	granted := append(append([]string{}, ScopesGmailCalendar...), "openid")
-	mgr := setupTestManager(t, ScopesGmailCalendar)
+	granted := []string{ScopeGmailReadonly}
+	mgr := setupTestManager(t, Scopes)
 	mgr.profileURL = srv.URL
 	mgr.browserFlowFn = func(
 		_ context.Context, _ string, _ bool,
@@ -644,129 +767,6 @@ func TestAuthorize_SavesActualGrantedScopesFromTokenResponse(t *testing.T) {
 	require.NoError(err, "loadTokenFile")
 	assert.Equal("actual-scope-token", loaded.AccessToken, "access token")
 	assert.ElementsMatch(granted, loaded.Scopes, "saved scopes")
-}
-
-func TestAuthorize_RejectsMissingGrantedScopeWithoutOverwritingToken(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-
-	srv := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"emailAddress":"user@gmail.com"}`)
-		}))
-	defer srv.Close()
-
-	mgr := setupTestManager(t, ScopesGmailCalendar)
-	require.NoError(mgr.saveToken("user@gmail.com", &oauth2.Token{
-		AccessToken:  "old-access",
-		RefreshToken: "old-refresh",
-		TokenType:    "Bearer",
-	}, Scopes), "seed existing token")
-	mgr.profileURL = srv.URL
-	mgr.browserFlowFn = func(
-		_ context.Context, _ string, _ bool,
-	) (*oauth2.Token, error) {
-		return (&oauth2.Token{
-			AccessToken:  "missing-calendar",
-			RefreshToken: "new-refresh",
-			TokenType:    "Bearer",
-			Expiry:       time.Now().Add(time.Hour),
-		}).WithExtra(map[string]any{"scope": strings.Join(Scopes, " ")}), nil
-	}
-
-	err := mgr.Authorize(context.Background(), "user@gmail.com")
-	require.Error(err, "Authorize should reject a token missing calendar.readonly")
-	require.ErrorContains(err, ScopeCalendarReadonly)
-
-	loaded, loadErr := mgr.loadTokenFile("user@gmail.com")
-	require.NoError(loadErr, "loadTokenFile")
-	assert.Equal("old-access", loaded.AccessToken, "existing token must not be overwritten")
-	assert.ElementsMatch(Scopes, loaded.Scopes, "existing scopes must be preserved")
-}
-
-func TestAuthorizeManualPreservingGrantedScopesRejectsTokenMissingPreservedScope(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-
-	srv := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"emailAddress":"user@gmail.com"}`)
-		}))
-	defer srv.Close()
-
-	existingScopes := append(append([]string{}, Scopes...), ScopeCalendarReadonly)
-	mgr := setupTestManager(t, Scopes)
-	require.NoError(mgr.saveToken("user@gmail.com", &oauth2.Token{
-		AccessToken:  "old-access",
-		RefreshToken: "old-refresh",
-		TokenType:    "Bearer",
-	}, existingScopes), "seed existing token")
-	mgr.profileURL = srv.URL
-	mgr.browserFlowFn = func(
-		_ context.Context, _ string, _ bool,
-	) (*oauth2.Token, error) {
-		return (&oauth2.Token{
-			AccessToken:  "gmail-only",
-			RefreshToken: "new-refresh",
-			TokenType:    "Bearer",
-			Expiry:       time.Now().Add(time.Hour),
-		}).WithExtra(map[string]any{"scope": strings.Join(Scopes, " ")}), nil
-	}
-
-	err := mgr.AuthorizeManualPreservingGrantedScopes(context.Background(), "user@gmail.com")
-	require.Error(err)
-	require.ErrorContains(err, ScopeCalendarReadonly)
-
-	loaded, loadErr := mgr.loadTokenFile("user@gmail.com")
-	require.NoError(loadErr, "loadTokenFile")
-	assert.Equal("old-access", loaded.AccessToken, "existing token must not be overwritten")
-	assert.ElementsMatch(existingScopes, loaded.Scopes, "existing scopes must be preserved")
-}
-
-// TestAuthorizePreservingGrantedScopesRejectsTokenMissingPreservedScope is the
-// browser twin of the manual test above: the sync preflight uses the browser
-// flow, and it must reject a re-consent that drops a previously granted scope
-// so preserved grants (Calendar, permanent-delete) are never silently lost.
-func TestAuthorizePreservingGrantedScopesRejectsTokenMissingPreservedScope(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-
-	srv := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"emailAddress":"user@gmail.com"}`)
-		}))
-	defer srv.Close()
-
-	existingScopes := append(append([]string{}, Scopes...), ScopeCalendarReadonly)
-	mgr := setupTestManager(t, Scopes)
-	require.NoError(mgr.saveToken("user@gmail.com", &oauth2.Token{
-		AccessToken:  "old-access",
-		RefreshToken: "old-refresh",
-		TokenType:    "Bearer",
-	}, existingScopes), "seed existing token")
-	mgr.profileURL = srv.URL
-	mgr.browserFlowFn = func(
-		_ context.Context, _ string, _ bool,
-	) (*oauth2.Token, error) {
-		return (&oauth2.Token{
-			AccessToken:  "gmail-only",
-			RefreshToken: "new-refresh",
-			TokenType:    "Bearer",
-			Expiry:       time.Now().Add(time.Hour),
-		}).WithExtra(map[string]any{"scope": strings.Join(Scopes, " ")}), nil
-	}
-
-	err := mgr.AuthorizePreservingGrantedScopes(context.Background(), "user@gmail.com")
-	require.Error(err)
-	require.ErrorContains(err, ScopeCalendarReadonly)
-
-	loaded, loadErr := mgr.loadTokenFile("user@gmail.com")
-	require.NoError(loadErr, "loadTokenFile")
-	assert.Equal("old-access", loaded.AccessToken, "existing token must not be overwritten")
-	assert.ElementsMatch(existingScopes, loaded.Scopes, "existing scopes must be preserved")
 }
 
 // TestAuthorize_RejectsMismatch verifies that authorize() rejects
@@ -1030,7 +1030,7 @@ func TestForceRefreshSavesRefreshedToken(t *testing.T) {
 		TokenType:    "Bearer",
 		RefreshToken: "refresh-1",
 		Expiry:       time.Now().Add(time.Hour),
-	}, []string{"scope-a"})
+	}, Scopes)
 
 	require.NoError(mgr.ForceRefresh(context.Background(), "test@gmail.com"))
 
@@ -1038,7 +1038,7 @@ func TestForceRefreshSavesRefreshedToken(t *testing.T) {
 	require.NoError(err)
 	assert.Equal("new-access", tf.AccessToken, "refreshed access token should be saved")
 	assert.Equal("refresh-1", tf.RefreshToken, "refresh token should be preserved")
-	assert.Equal([]string{"scope-a"}, tf.Scopes, "stored scopes should be preserved")
+	assert.Equal(Scopes, tf.Scopes, "stored scopes should be preserved")
 }
 
 func TestForceRefreshWithoutStoredToken(t *testing.T) {

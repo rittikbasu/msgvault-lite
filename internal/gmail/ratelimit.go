@@ -16,15 +16,12 @@ type Clock interface {
 type Operation int
 
 const (
-	OpMessagesGet         Operation = iota // 5 units
-	OpMessagesGetRaw                       // 5 units
-	OpMessagesList                         // 5 units
-	OpLabelsList                           // 1 unit
-	OpHistoryList                          // 2 units
-	OpMessagesTrash                        // 5 units
-	OpMessagesDelete                       // 10 units
-	OpMessagesBatchDelete                  // 50 units
-	OpProfile                              // 1 unit
+	OpMessagesGet    Operation = iota // 5 units
+	OpMessagesGetRaw                  // 5 units
+	OpMessagesList                    // 5 units
+	OpLabelsList                      // 1 unit
+	OpHistoryList                     // 2 units
+	OpProfile                         // 1 unit
 
 	// OpCalendarListList and the other Calendar API operations live on this
 	// shared Operation enum (rather than a parallel one in internal/gcal) so
@@ -41,12 +38,8 @@ const (
 // Cost returns the quota cost for an operation.
 func (o Operation) Cost() int {
 	switch o {
-	case OpMessagesGet, OpMessagesGetRaw, OpMessagesList, OpMessagesTrash:
+	case OpMessagesGet, OpMessagesGetRaw, OpMessagesList:
 		return 5
-	case OpMessagesDelete:
-		return 10
-	case OpMessagesBatchDelete:
-		return 50
 	case OpHistoryList:
 		return 2
 	default:

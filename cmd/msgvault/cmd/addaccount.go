@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/msgvault/internal/oauth"
@@ -36,8 +36,8 @@ var addAccountCmd = &cobra.Command{
 By default, opens a browser for authorization. Use --headless to see instructions
 for authorizing on headless servers (Google does not support Gmail in device flow).
 
-If a token already exists, the command skips authorization. Use --force to delete
-the existing token and start a fresh OAuth flow.
+If a token already exists, the command skips authorization. Use --force to obtain
+and validate a replacement before atomically replacing the existing token.
 
 For Google Workspace orgs that require their own OAuth app, use --oauth-app to
 specify a named app from config.toml.
@@ -61,9 +61,6 @@ func newAddAccountCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if headless && forceReauth {
 				return usageErr(cmd, errors.New("--headless and --force cannot be used together: --force requires browser-based OAuth which is not available in headless mode"))
-			}
-			if !isDaemonCLISubprocess() {
-				return runAddAccountHTTP(cmd, args)
 			}
 			return runAddAccountLocal(cmd, args)
 		},
@@ -100,19 +97,10 @@ func resolveAddAccountBinding(flagApp string, flagExplicit bool, storedApp sql.N
 	return binding
 }
 
-// newAddAccountOAuthManager builds the Gmail OAuth manager for email,
-// preserving any already-granted scopes so Google's replacement consent
-// does not drop Calendar/Drive scopes from the shared token file.
-func newAddAccountOAuthManager(clientSecretsPath, email string) (*oauth.Manager, error) {
-	scopeProbe, err := oauth.NewManager(clientSecretsPath, cfg.TokensDir(), logger)
-	if err != nil {
-		return nil, wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
-	}
-	oauthScopes := addAccountOAuthScopesForToken(
-		scopeProbe.HasScopeMetadata(email),
-		scopeProbe.GrantedScopes(email),
-	)
-	mgr, err := oauth.NewManagerWithScopes(clientSecretsPath, cfg.TokensDir(), logger, oauthScopes)
+// newAddAccountOAuthManager builds a Gmail manager that requests only the
+// exact read-only grant, replacing any legacy broader token on reauthorization.
+func newAddAccountOAuthManager(clientSecretsPath, _ string) (*oauth.Manager, error) {
+	mgr, err := oauth.NewManager(clientSecretsPath, cfg.TokensDir(), logger)
 	if err != nil {
 		return nil, wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
 	}
@@ -125,10 +113,9 @@ func newAddAccountOAuthManager(clientSecretsPath, email string) (*oauth.Manager,
 // change, or a stored binding — because a mismatched token would fail on
 // its next refresh.
 func addAccountTokenReusable(mgr *oauth.Manager, email string, binding addAccountBinding) bool {
-	needsClientCheck := binding.bindingChanged || binding.explicit ||
-		binding.resolvedApp != ""
+	_ = binding
 	return mgr.HasToken(email) &&
-		(!needsClientCheck || mgr.TokenMatchesClient(email)) &&
+		mgr.TokenMatchesClient(email) &&
 		addAccountTokenHasGmailScopes(mgr, email)
 }
 
@@ -147,92 +134,20 @@ func addAccountAuthorizeError(err error, sourceExists bool) error {
 	return fmt.Errorf("authorization failed: %w", err)
 }
 
-// runAddAccountHTTP completes any needed browser authorization in this
-// process — which owns the user's display and browser — before proxying to
-// the daemon. The subprocess then finds a fresh reusable token, so it never
-// opens a browser (or waits on a human) while holding the operation gate.
-func runAddAccountHTTP(cmd *cobra.Command, args []string) error {
-	if !headless {
-		if err := preflightAddAccountAuthorize(cmd, args[0]); err != nil {
-			return err
+func validateSingleGmailArchive(s *store.Store, email string) error {
+	sources, err := s.ListSources("")
+	if err != nil {
+		return fmt.Errorf("list configured sources: %w", err)
+	}
+	for _, source := range sources {
+		if source.SourceType != sourceTypeGmail {
+			return fmt.Errorf("archive contains unsupported source type %q; msgvault-lite supports exactly one Gmail source", source.SourceType)
 		}
-	}
-	return runDaemonCLICommandHTTPFromCobra(cmd, args)
-}
-
-func preflightAddAccountAuthorize(cmd *cobra.Command, email string) error {
-	if IsRemoteMode() {
-		// Tokens live on the remote host; authorization must happen there.
-		return nil
-	}
-	storedApp, sourceExists, err := lookupGmailAccountBinding(cmd.Context(), email)
-	if err != nil {
-		return err
-	}
-	binding := resolveAddAccountBinding(oauthAppName, cmd.Flags().Changed("oauth-app"), storedApp, sourceExists)
-	if cfg.OAuth.ServiceAccountKeyFor(binding.resolvedApp) != "" {
-		// Service accounts mint tokens on demand; no browser involved.
-		return nil
-	}
-	clientSecretsPath, err := cfg.OAuth.ClientSecretsFor(binding.resolvedApp)
-	if err != nil {
-		// Let the subprocess report the configuration error.
-		return nil //nolint:nilerr // deliberate: config errors surface daemon-side
-	}
-	mgr, err := newAddAccountOAuthManager(clientSecretsPath, email)
-	if err != nil {
-		return err
-	}
-	if forceReauth {
-		if mgr.HasToken(email) {
-			fmt.Printf("Removing existing token for %s...\n", email)
-			if err := mgr.DeleteToken(email); err != nil {
-				return fmt.Errorf("delete existing token: %w", err)
-			}
-		} else {
-			fmt.Printf("No existing token found for %s, proceeding with authorization.\n", email)
-		}
-	}
-	if addAccountTokenReusable(mgr, email, binding) {
-		return nil
-	}
-
-	if binding.bindingChanged {
-		fmt.Printf("Switching OAuth app for %s to %q. Authorizing...\n", email, oauthAppName)
-	} else {
-		fmt.Println("Starting browser authorization...")
-	}
-	if err := mgr.Authorize(cmd.Context(), email); err != nil {
-		return addAccountAuthorizeError(err, sourceExists)
-	}
-	// The subprocess must not force-delete the token minted above.
-	if forceReauth {
-		if err := cmd.Flags().Set("force", "false"); err != nil {
-			return fmt.Errorf("clear --force after authorization: %w", err)
+		if source.Identifier != email {
+			return fmt.Errorf("Gmail account %s is already configured; msgvault-lite supports exactly one account", source.Identifier)
 		}
 	}
 	return nil
-}
-
-// lookupGmailAccountBinding fetches the stored oauth_app binding for email
-// through the daemon's read API, mirroring findGmailSource for callers
-// without direct database access.
-func lookupGmailAccountBinding(ctx context.Context, email string) (sql.NullString, bool, error) {
-	st, _, err := OpenHTTPStore(ctx)
-	if err != nil {
-		return sql.NullString{}, false, err
-	}
-	defer func() { _ = st.Close() }()
-	accounts, err := st.GetCLIAccounts(ctx)
-	if err != nil {
-		return sql.NullString{}, false, fmt.Errorf("look up existing source: %w", err)
-	}
-	for _, account := range accounts {
-		if account.Type == sourceTypeGmail && account.Email == email {
-			return sql.NullString{String: account.OAuthApp, Valid: account.OAuthApp != ""}, true, nil
-		}
-	}
-	return sql.NullString{}, false, nil
 }
 
 func runAddAccountLocal(cmd *cobra.Command, args []string) error {
@@ -251,6 +166,10 @@ func runAddAccountLocal(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer cleanup()
+
+	if err := validateSingleGmailArchive(s, email); err != nil {
+		return err
+	}
 
 	// Look up existing source to detect binding changes
 	existingSource, err := findGmailSource(s, email)
@@ -280,7 +199,7 @@ func runAddAccountLocal(cmd *cobra.Command, args []string) error {
 		if forceReauth {
 			return usageErr(cmd, errors.New("service accounts do not use --force; tokens are minted on demand from the configured service account key"))
 		}
-		saMgr, saErr := oauth.NewServiceAccountManager(saKeyPath, oauth.Scopes)
+		saMgr, saErr := oauth.NewServiceAccountManager(saKeyPath)
 		if saErr != nil {
 			return fmt.Errorf("service account: %w", saErr)
 		}
@@ -354,18 +273,6 @@ func runAddAccountLocal(cmd *cobra.Command, args []string) error {
 	oauthMgr, err := newAddAccountOAuthManager(clientSecretsPath, email)
 	if err != nil {
 		return err
-	}
-
-	// If --force, delete existing token so we re-authorize
-	if forceReauth {
-		if oauthMgr.HasToken(email) {
-			fmt.Printf("Removing existing token for %s...\n", email)
-			if err := oauthMgr.DeleteToken(email); err != nil {
-				return fmt.Errorf("delete existing token: %w", err)
-			}
-		} else {
-			fmt.Printf("No existing token found for %s, proceeding with authorization.\n", email)
-		}
 	}
 
 	tokenReusable := !forceReauth && addAccountTokenReusable(oauthMgr, email, binding)
@@ -460,32 +367,12 @@ func runAddAccountLocal(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func addAccountOAuthScopesForToken(hasScopeMetadata bool, existingScopes []string) []string {
-	if !hasScopeMetadata {
-		return append([]string(nil), oauth.Scopes...)
-	}
-	scopes := append([]string(nil), existingScopes...)
-	for _, scope := range oauth.Scopes {
-		scopes = appendScopeIfMissing(scopes, scope)
-	}
-	return scopes
-}
-
 func addAccountTokenHasGmailScopes(mgr *oauth.Manager, email string) bool {
 	if !mgr.HasScopeMetadata(email) {
-		return true
+		return false
 	}
-	for _, scope := range oauth.ScopesDeletion {
-		if mgr.HasScope(email, scope) {
-			return true
-		}
-	}
-	for _, scope := range oauth.Scopes {
-		if !mgr.HasScope(email, scope) {
-			return false
-		}
-	}
-	return true
+	granted := mgr.GrantedScopes(email)
+	return len(granted) == len(oauth.Scopes) && slices.Contains(granted, oauth.ScopeGmailReadonly)
 }
 
 func findGmailSource(

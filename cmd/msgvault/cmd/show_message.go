@@ -19,23 +19,24 @@ var (
 )
 
 var showMessageCmd = &cobra.Command{
-	Use:   "show-message <id>",
-	Short: "Show full message details",
+	Use:     "show <id>",
+	Aliases: []string{"show-message"},
+	Short:   "Show full message details",
 	Long: `Show the complete details of a local message by its internal ID or Gmail ID.
 
 This command displays the full message including headers, body, labels,
 and attachment information. Use --json for programmatic output.
 
 Examples:
-  msgvault show-message 12345
-	msgvault show-message 18f0abc123def --json`,
+  msgvault show 12345
+	msgvault show 18f0abc123def --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := resolveMessageIDArg(args[0])
 		if err != nil {
 			return err
 		}
-		return showHTTPMessage(cmd, id)
+		return runShowMessage(cmd, id)
 	},
 }
 
@@ -58,7 +59,7 @@ func resolveMessageIDArg(raw string) (string, error) {
 	return trimmed, nil
 }
 
-func showHTTPMessage(cmd *cobra.Command, idStr string) error {
+func runShowMessage(cmd *cobra.Command, idStr string) error {
 	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)

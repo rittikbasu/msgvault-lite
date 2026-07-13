@@ -52,20 +52,15 @@ func seedDirectCLIArchive(t *testing.T) (string, int64) {
 func TestSearchReadsSQLiteDirectly(t *testing.T) {
 	_, messageID := seedDirectCLIArchive(t)
 	oldLimit, oldOffset, oldJSON := searchLimit, searchOffset, searchJSON
-	oldAccount, oldCollection := searchAccount, searchCollection
-	oldTypes := append([]string(nil), searchMessageTypes...)
 	t.Cleanup(func() {
 		searchLimit, searchOffset, searchJSON = oldLimit, oldOffset, oldJSON
-		searchAccount, searchCollection = oldAccount, oldCollection
-		searchMessageTypes = oldTypes
 	})
 	searchLimit, searchOffset, searchJSON = 10, 0, true
-	searchAccount, searchCollection, searchMessageTypes = "", "", nil
 
 	stop := captureStdout(t)
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
-	err := runHTTPSearch(cmd, "subject:Needle")
+	err := runSearch(cmd, "subject:Needle")
 	output := stop()
 
 	require.NoError(t, err)
@@ -82,7 +77,7 @@ func TestShowMessageReadsSQLiteDirectly(t *testing.T) {
 	stop := captureStdout(t)
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
-	err := showHTTPMessage(cmd, formatCount(messageID))
+	err := runShowMessage(cmd, formatCount(messageID))
 	output := stop()
 
 	require.NoError(t, err)
@@ -92,10 +87,6 @@ func TestShowMessageReadsSQLiteDirectly(t *testing.T) {
 
 func TestStatsReadsSQLiteDirectly(t *testing.T) {
 	dataDir, _ := seedDirectCLIArchive(t)
-	oldAccount, oldCollection := statsAccount, statsCollection
-	statsAccount, statsCollection = "", ""
-	t.Cleanup(func() { statsAccount, statsCollection = oldAccount, oldCollection })
-
 	var out bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
@@ -105,4 +96,23 @@ func TestStatsReadsSQLiteDirectly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out.String(), "Database: "+filepath.Join(dataDir, "msgvault.db"))
 	assert.Contains(t, out.String(), "Messages:    1")
+}
+
+func TestMessagesReadsSQLiteDirectly(t *testing.T) {
+	_, messageID := seedDirectCLIArchive(t)
+	oldLimit, oldOffset := messagesLimit, messagesOffset
+	messagesLimit, messagesOffset = 10, 0
+	t.Cleanup(func() { messagesLimit, messagesOffset = oldLimit, oldOffset })
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
+	err := runMessages(cmd)
+
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), formatCount(messageID))
+	assert.Contains(t, out.String(), "2026-07-01")
+	assert.Contains(t, out.String(), "Needle subject")
+	assert.Contains(t, out.String(), "Showing 1 of 1 messages.")
 }

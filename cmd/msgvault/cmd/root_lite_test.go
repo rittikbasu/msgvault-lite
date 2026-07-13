@@ -10,7 +10,7 @@ import (
 
 func TestRetainLiteCommandsRemovesLegacySurface(t *testing.T) {
 	root := &cobra.Command{Use: "msgvault"}
-	for _, name := range []string{"search", "sync", "backup", "openapi", "deduplicate", "list-accounts", "tui"} {
+	for _, name := range []string{"status", "messages", "show", "search", "sync", "backup", "openapi", "deduplicate", "list-accounts", "tui"} {
 		root.AddCommand(&cobra.Command{Use: name})
 	}
 
@@ -20,7 +20,14 @@ func TestRetainLiteCommandsRemovesLegacySurface(t *testing.T) {
 	for _, command := range root.Commands() {
 		names = append(names, command.Name())
 	}
-	assert.ElementsMatch(t, []string{"backup", "search", "sync"}, names)
+	assert.ElementsMatch(t, []string{"backup", "messages", "search", "show", "status", "sync"}, names)
+}
+
+func TestLiteCommandCanonicalNamesKeepLegacyAliases(t *testing.T) {
+	assert.Equal(t, "status", statsCmd.Name())
+	assert.Contains(t, statsCmd.Aliases, "stats")
+	assert.Equal(t, "show", showMessageCmd.Name())
+	assert.Contains(t, showMessageCmd.Aliases, "show-message")
 }
 
 func TestSyncIncrementalAliasIsRejected(t *testing.T) {

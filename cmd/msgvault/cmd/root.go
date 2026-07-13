@@ -312,17 +312,18 @@ func ExecuteContext(ctx context.Context) error {
 }
 
 var liteCommandNames = map[string]struct{}{
-	"add-account":  {},
-	"backup":       {},
-	"completion":   {},
-	"logs":         {},
-	"search":       {},
-	"show-message": {},
-	"stats":        {},
-	"sync":         {},
-	"sync-full":    {},
-	"verify":       {},
-	"version":      {},
+	"add-account": {},
+	"backup":      {},
+	"completion":  {},
+	"logs":        {},
+	"messages":    {},
+	"search":      {},
+	"show":        {},
+	"status":      {},
+	"sync":        {},
+	"sync-full":   {},
+	"verify":      {},
+	"version":     {},
 }
 
 func retainLiteCommands(root *cobra.Command) {

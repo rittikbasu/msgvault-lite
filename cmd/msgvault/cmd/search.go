@@ -15,14 +15,9 @@ import (
 )
 
 var (
-	searchLimit        int
-	searchOffset       int
-	searchJSON         bool
-	searchAccount      string
-	searchCollection   string
-	searchMode         = "fts"
-	searchExplain      bool
-	searchMessageTypes []string
+	searchLimit  int
+	searchOffset int
+	searchJSON   bool
 )
 
 var searchCmd = &cobra.Command{
@@ -44,7 +39,6 @@ Supported operators:
   newer_than:  Relative date
   larger:      Size filter (5M, 100K)
   smaller:     Size filter
-  message_type: Message type filter (sms, mms, whatsapp, teams, email)
 
 Bare words and "quoted phrases" perform full-text search.
 
@@ -58,25 +52,8 @@ Examples:
 		// Join all args to form the query (allows unquoted multi-term searches)
 		queryStr := strings.Join(args, " ")
 
-		if queryStr == "" && searchAccount == "" && searchCollection == "" && len(searchMessageTypes) == 0 {
-			return usageErr(cmd, errors.New("provide a search query or --account/--collection flag"))
-		}
-
-		// Validate mode before any scope work so we fail fast on a typo.
-		if searchMode != "fts" {
-			return usageErr(cmd, fmt.Errorf("invalid --mode: %q (only fts is supported)", searchMode))
-		}
-
-		// Validate --message-type against the known set, like --mode, so a
-		// typo (e.g. carrier_pigeon) fails fast instead of silently
-		// returning no results.
-		for _, mt := range searchMessageTypes {
-			if !query.IsKnownMessageType(mt) {
-				return usageErr(cmd, fmt.Errorf(
-					"invalid --message-type: %q (want one of: %s)",
-					mt, strings.Join(query.KnownMessageTypes, ", "),
-				))
-			}
+		if queryStr == "" {
+			return usageErr(cmd, errors.New("provide a search query"))
 		}
 
 		if searchLimit <= 0 {
@@ -93,21 +70,14 @@ Examples:
 		if err := search.Parse(queryStr).Err(); err != nil {
 			return usageErr(cmd, err)
 		}
-		if searchMode == "fts" {
-			parsed := search.Parse(queryStr)
-			parsed.MessageTypes = append(parsed.MessageTypes, searchMessageTypes...)
-			if parsed.IsEmpty() && searchAccount == "" && searchCollection == "" {
-				return errors.New("empty search query")
-			}
+		if search.Parse(queryStr).IsEmpty() {
+			return errors.New("empty search query")
 		}
-		return runHTTPSearch(cmd, queryStr)
+		return runSearch(cmd, queryStr)
 	},
 }
 
-func runHTTPSearch(cmd *cobra.Command, queryStr string) error {
-	if searchAccount != "" || searchCollection != "" {
-		return errors.New("account and collection scopes were removed; msgvault-lite uses one local Gmail archive")
-	}
+func runSearch(cmd *cobra.Command, queryStr string) error {
 	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -115,7 +85,6 @@ func runHTTPSearch(cmd *cobra.Command, queryStr string) error {
 	defer func() { _ = s.Close() }()
 
 	parsed := search.Parse(queryStr)
-	parsed.MessageTypes = append(parsed.MessageTypes, searchMessageTypes...)
 	results, err := query.NewSQLiteEngine(s.DB()).Search(
 		cmd.Context(), parsed, searchLimit, searchOffset,
 	)

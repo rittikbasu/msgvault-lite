@@ -38,13 +38,9 @@ func TestResolveMessageIDArgValidation(t *testing.T) {
 }
 
 func TestSearchValidatesBeforeOpeningArchive(t *testing.T) {
-	oldLimit, oldOffset, oldMode := searchLimit, searchOffset, searchMode
-	oldAccount, oldCollection := searchAccount, searchCollection
-	oldTypes := append([]string(nil), searchMessageTypes...)
+	oldLimit, oldOffset := searchLimit, searchOffset
 	t.Cleanup(func() {
-		searchLimit, searchOffset, searchMode = oldLimit, oldOffset, oldMode
-		searchAccount, searchCollection = oldAccount, oldCollection
-		searchMessageTypes = oldTypes
+		searchLimit, searchOffset = oldLimit, oldOffset
 	})
 
 	tests := []struct {
@@ -54,16 +50,13 @@ func TestSearchValidatesBeforeOpeningArchive(t *testing.T) {
 		wantErr string
 	}{
 		{name: "empty", wantErr: "provide a search query"},
-		{name: "mode", args: []string{"needle"}, setup: func() { searchMode = "hybrid" }, wantErr: "only fts is supported"},
-		{name: "message type", args: []string{"needle"}, setup: func() { searchMessageTypes = []string{"carrier_pigeon"} }, wantErr: "invalid --message-type"},
 		{name: "limit", args: []string{"needle"}, setup: func() { searchLimit = 0 }, wantErr: "--limit must be a positive integer"},
 		{name: "offset", args: []string{"needle"}, setup: func() { searchOffset = -1 }, wantErr: "--offset must be non-negative"},
 		{name: "date", args: []string{"before:2025-13-45"}, wantErr: "invalid"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			searchLimit, searchOffset, searchMode = 10, 0, "fts"
-			searchAccount, searchCollection, searchMessageTypes = "", "", nil
+			searchLimit, searchOffset = 10, 0
 			if tt.setup != nil {
 				tt.setup()
 			}

@@ -8,25 +8,17 @@ import (
 	"go.kenn.io/msgvault/internal/store"
 )
 
-var (
-	statsAccount    string
-	statsCollection string
-)
-
 var statsCmd = &cobra.Command{
-	Use:   "stats",
-	Short: "Show database statistics",
-	Long:  `Show statistics about the local email archive.`,
-	Args:  cobra.NoArgs,
-	RunE:  runStats,
+	Use:     "status",
+	Aliases: []string{"stats"},
+	Short:   "Show local archive status",
+	Long:    `Show statistics about the local email archive.`,
+	Args:    cobra.NoArgs,
+	RunE:    runStats,
 }
 
 func runStats(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
-	if statsAccount != "" || statsCollection != "" {
-		return fmt.Errorf("account and collection scopes were removed; msgvault-lite uses one local Gmail archive")
-	}
-
 	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)

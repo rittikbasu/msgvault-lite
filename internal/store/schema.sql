@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS conversation_participants (
 
 -- Messages (unified across all platforms)
 CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
 
@@ -451,6 +451,15 @@ CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(source_id, deleted_from_source_at);
 CREATE INDEX IF NOT EXISTS idx_messages_source_message_id ON messages(source_message_id);
+
+-- Message IDs are durable archive cursors. Physical deletion could let SQLite
+-- reuse the current maximum ROWID, so source deletions and local hiding must be
+-- represented by deleted_from_source_at/deleted_at tombstones instead.
+CREATE TRIGGER IF NOT EXISTS messages_reject_delete
+BEFORE DELETE ON messages
+BEGIN
+    SELECT RAISE(ABORT, 'message rows are insert-only');
+END;
 
 -- Message recipients
 CREATE INDEX IF NOT EXISTS idx_message_recipients_message ON message_recipients(message_id);

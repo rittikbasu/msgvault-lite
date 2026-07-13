@@ -1315,7 +1315,7 @@ func TestHandleCLIRunBackupSubcommandAdmission(t *testing.T) {
 	}
 }
 
-func TestCLIDeleteDedupedPlansAndExecutesThroughDaemon(t *testing.T) {
+func TestCLIDeleteDedupedPlansButRefusesExecution(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
 
@@ -1369,11 +1369,8 @@ func TestCLIDeleteDedupedPlansAndExecutesThroughDaemon(t *testing.T) {
 	executeResp := httptest.NewRecorder()
 	srv.Router().ServeHTTP(executeResp, executeReq)
 
-	require.Equal(http.StatusOK, executeResp.Code, "execute status: %s", executeResp.Body.String())
-	var executed cliDeleteDedupedExecuteResponse
-	require.NoError(json.NewDecoder(executeResp.Body).Decode(&executed), "decode execute")
-	assert.Equal(int64(2), executed.Deleted, "deleted")
-	assert.Equal(int64(2), executed.BatchCount, "execute batch count")
+	require.Equal(http.StatusConflict, executeResp.Code, "execute status: %s", executeResp.Body.String())
+	assert.Contains(executeResp.Body.String(), "messages_insert_only")
 
 	var count int
 	err = f.Store.DB().QueryRow(
@@ -1382,7 +1379,7 @@ func TestCLIDeleteDedupedPlansAndExecutesThroughDaemon(t *testing.T) {
 		dropB,
 	).Scan(&count)
 	require.NoError(err, "count deleted rows")
-	assert.Equal(0, count, "deduped rows should be deleted")
+	assert.Equal(2, count, "deduped rows must remain archived")
 }
 
 func TestCLIDeleteDedupedRejectsChangedBatchPlan(t *testing.T) {
@@ -2436,7 +2433,7 @@ func TestHandleCLIMessageResolvesSourceMessageID(t *testing.T) {
 	require.NoError(err, "GetOrCreateSource")
 	convID, err := st.EnsureConversation(src.ID, "thread-1", "")
 	require.NoError(err, "EnsureConversation")
-	_, err = st.PersistMessage(&store.MessagePersistData{
+	messageID, err := st.PersistMessage(&store.MessagePersistData{
 		Message: &store.Message{
 			SourceID:        src.ID,
 			ConversationID:  convID,
@@ -2463,7 +2460,7 @@ func TestHandleCLIMessageResolvesSourceMessageID(t *testing.T) {
 		BodyText        string `json:"body_text"`
 	}
 	require.NoError(json.NewDecoder(w.Body).Decode(&resp), "decode response")
-	assert.Equal(int64(1), resp.ID, "ID")
+	assert.Equal(messageID, resp.ID, "ID")
 	assert.Equal("gmail-42", resp.SourceMessageID, "SourceMessageID")
 	assert.Equal("Hello", resp.Subject, "Subject")
 	assert.Equal("Body text", resp.BodyText, "BodyText")

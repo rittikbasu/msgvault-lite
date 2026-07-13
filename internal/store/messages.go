@@ -65,6 +65,9 @@ type Message struct {
 	ArchivedAt      time.Time
 }
 
+// ErrMessagesInsertOnly reports an attempted physical deletion from the archive.
+var ErrMessagesInsertOnly = errors.New("message rows are insert-only")
+
 // MessageExistsBatch checks which message IDs already exist in the database.
 // Returns a map of source_message_id -> internal message_id for existing messages.
 func (s *Store) MessageExistsBatch(sourceID int64, sourceMessageIDs []string) (map[string]int64, error) {
@@ -165,7 +168,7 @@ func (s *Store) UpdateMessageOnDedup(
 
 // MigrateSourceMessageID rewrites a legacy source_message_id to a new value
 // for one conversation. If the new ID already exists, dependents are repointed
-// and the legacy row is removed so future imports converge on the new key.
+// and the legacy row is hidden while remaining in the insert-only archive.
 func (s *Store) MigrateSourceMessageID(sourceID, conversationID int64, legacySourceMessageID, newSourceMessageID string) error {
 	if legacySourceMessageID == "" || legacySourceMessageID == newSourceMessageID {
 		return nil
@@ -206,13 +209,15 @@ func (s *Store) MigrateSourceMessageID(sourceID, conversationID int64, legacySou
 				}
 			}
 
-			_, err = tx.Exec(
-				`DELETE FROM messages
+			_, err = tx.Exec(fmt.Sprintf(
+				`UPDATE messages
+				 SET deleted_at = COALESCE(deleted_at, %s), delete_batch_id = NULL
 				 WHERE source_id = ? AND conversation_id = ? AND source_message_id = ?`,
+				s.dialect.Now()),
 				sourceID, conversationID, legacySourceMessageID,
 			)
 			if err != nil {
-				return fmt.Errorf("delete legacy source_message_id: %w", err)
+				return fmt.Errorf("hide legacy source_message_id: %w", err)
 			}
 			return nil
 		}
@@ -280,16 +285,17 @@ func (s *Store) EnsureConversation(sourceID int64, sourceConversationID, title s
 	return id, nil
 }
 
-// upsertMessageSQL returns the message upsert SQL with dialect-specific timestamp.
-func upsertMessageSQL(now string) string {
+// upsertMessageSQL returns the message upsert SQL with dialect-specific ID and timestamp expressions.
+func upsertMessageSQL(id, now string) string {
 	return fmt.Sprintf(`
 	INSERT INTO messages (
+		id,
 		conversation_id, source_id, source_message_id,
 		rfc822_message_id, message_type,
 		sent_at, received_at, internal_date, sender_id, is_from_me,
 		subject, snippet, size_estimate,
 		has_attachments, attachment_count, archived_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+	) VALUES (%s, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
 	ON CONFLICT(source_id, source_message_id) DO UPDATE SET
 		embed_gen = CASE
 			WHEN COALESCE(messages.subject, '') <> COALESCE(excluded.subject, '') THEN NULL
@@ -306,7 +312,21 @@ func upsertMessageSQL(now string) string {
 		snippet = excluded.snippet,
 		size_estimate = excluded.size_estimate,
 		has_attachments = excluded.has_attachments,
-		attachment_count = excluded.attachment_count`, now)
+		attachment_count = excluded.attachment_count`, id, now)
+}
+
+// nextMessageIDSQL lifts upgraded SQLite archives out of any legacy ROWID
+// range whose deleted high-water mark is unknowable. Unix milliseconds remain
+// exactly representable by JavaScript numbers while dwarfing plausible message
+// counts; MAX(id)+1 preserves monotonicity once the archive reaches that floor.
+func nextMessageIDSQL(d Dialect) string {
+	if d.DriverName() != "sqlite3" {
+		return "DEFAULT"
+	}
+	return `(SELECT MAX(
+		COALESCE(MAX(id) + 1, 1),
+		CAST(strftime('%s', 'now') AS INTEGER) * 1000
+	) FROM messages)`
 }
 
 // UpsertMessage inserts or updates a message.
@@ -315,7 +335,7 @@ func (s *Store) UpsertMessage(msg *Message) (int64, error) {
 }
 
 func upsertMessageWith(q querier, d Dialect, msg *Message) (int64, error) {
-	sql := upsertMessageSQL(d.Now())
+	sql := upsertMessageSQL(nextMessageIDSQL(d), d.Now())
 	args := []any{
 		msg.ConversationID, msg.SourceID, msg.SourceMessageID,
 		msg.RFC822MessageID, msg.MessageType,
@@ -967,13 +987,12 @@ func (s *Store) MarkMessagesDeletedBatch(sourceID int64, sourceMessageIDs []stri
 }
 
 // MarkMessageDeletedByGmailID marks a message as deleted by its Gmail ID.
-// This is used by the deletion executor which only has the Gmail message ID.
-// When permanent is true, the message row is deleted entirely; otherwise it is
-// soft-deleted by setting deleted_from_source_at.
+// The permanent argument describes the source-side operation only; archive rows
+// are always retained as tombstones.
 //
 // A2 (deferred): the match is NOT scoped by source_id, so a Gmail-ID collision
-// across two accounts would delete/soft-delete the wrong account's row (blast
-// radius: one row in the colliding account). This is deferred rather than fixed
+// across two accounts would tombstone the wrong account's row (blast radius:
+// one row in the colliding account). This is deferred rather than fixed
 // because the deletion Manifest carries only a flat []GmailIDs with no per-id
 // source_id (internal/deletion/manifest.go), and a single manifest can legitimately
 // span multiple accounts (see internal/tui/actions.go resolveGmailIDs /
@@ -981,12 +1000,7 @@ func (s *Store) MarkMessagesDeletedBatch(sourceID int64, sourceMessageIDs []stri
 // Filters.Account cannot scope every id correctly. Properly scoping this needs a
 // manifest schema/version change (out of scope). Gmail IDs are random enough that
 // a cross-account collision is astronomically unlikely. See docs/internal/PG_STATUS.md.
-func (s *Store) MarkMessageDeletedByGmailID(permanent bool, gmailID string) error {
-	if permanent {
-		// A2 (deferred): unscoped by source_id — see function doc.
-		_, err := s.db.Exec(`DELETE FROM messages WHERE source_message_id = ?`, gmailID)
-		return err
-	}
+func (s *Store) MarkMessageDeletedByGmailID(_ bool, gmailID string) error {
 	// A2 (deferred): unscoped by source_id — see function doc.
 	_, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE messages

@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"compress/zlib"
-	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -374,30 +373,10 @@ func (s *Store) UndoDedup(batchID string) (int64, error) {
 	return result.RowsAffected()
 }
 
-// DeleteDedupedBatch permanently deletes all hidden rows associated with a
-// dedup batch. Only deletes rows where deleted_at IS NOT NULL AND
-// delete_batch_id = batchID. Returns the number of rows deleted.
-//
-// This is irreversible. Caller is responsible for backups.
-// Attachments cascade-delete from the metadata row; on-disk blobs are
-// content-addressed and survive until separate cleanup.
-func (s *Store) DeleteDedupedBatch(batchID string) (int64, error) {
-	// runMaintenance disables the pool-wide 30s statement_timeout for this
-	// tx: the cascade DELETE is unbounded and exceeds 30s on a large archive
-	// (finding S1). No-op timeout reset on SQLite.
-	var deleted int64
-	err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		result, err := tx.ExecContext(ctx, `
-			DELETE FROM messages
-			WHERE delete_batch_id = ? AND deleted_at IS NOT NULL
-		`, batchID)
-		if err != nil {
-			return fmt.Errorf("delete dedup batch %q: %w", batchID, err)
-		}
-		deleted, err = result.RowsAffected()
-		return err
-	})
-	return deleted, err
+// DeleteDedupedBatch is retained for compatibility with legacy callers but
+// refuses physical deletion because message IDs are durable archive cursors.
+func (s *Store) DeleteDedupedBatch(_ string) (int64, error) {
+	return 0, ErrMessagesInsertOnly
 }
 
 func (s *Store) CountDedupedBatches(batchIDs []string) ([]DedupedBatchCount, int64, error) {
@@ -432,53 +411,10 @@ func (s *Store) CountAllDeduped() (total int64, distinctBatches int64, err error
 	return total, distinctBatches, nil
 }
 
-// DeleteAllDeduped permanently deletes every dedup-hidden row regardless of
-// batch. Returns the number of rows deleted and the number of distinct
-// batches affected.
-//
-// The delete is gated on the positive marker `delete_batch_id IS NOT NULL`
-// in addition to `deleted_at IS NOT NULL` so that the contract is "permanently
-// remove rows the dedup pipeline soft-hid." If a future feature ever adds
-// another soft-delete semantics that writes deleted_at without a batch ID
-// (e.g. a "trash" view, a per-message user hide), this command will leave
-// those rows alone — they are not dedup-hidden and have no business being
-// purged by the local dedup hard-delete rung.
-//
-// This is irreversible. Caller is responsible for backups.
-// Attachments cascade-delete from the metadata row; on-disk blobs are
-// content-addressed and survive until separate cleanup.
-func (s *Store) DeleteAllDeduped() (deleted int64, distinctBatches int64, err error) {
-	// runMaintenance wraps the count + cascade DELETE in one transaction with
-	// the pool-wide 30s statement_timeout disabled: the unbounded cascade
-	// DELETE exceeds 30s on a large archive (finding S1). The count and the
-	// delete share the tx so they observe the same snapshot, as before.
-	// No-op timeout reset on SQLite.
-	err = s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(DISTINCT delete_batch_id)
-			FROM messages
-			WHERE deleted_at IS NOT NULL AND delete_batch_id IS NOT NULL
-		`).Scan(&distinctBatches); err != nil {
-			return fmt.Errorf("delete all dedup-hidden: count batches: %w", err)
-		}
-
-		result, err := tx.ExecContext(ctx, `
-			DELETE FROM messages
-			WHERE deleted_at IS NOT NULL AND delete_batch_id IS NOT NULL
-		`)
-		if err != nil {
-			return fmt.Errorf("delete all dedup-hidden: delete: %w", err)
-		}
-		deleted, err = result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("delete all dedup-hidden: rows affected: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	return deleted, distinctBatches, nil
+// DeleteAllDeduped is retained for compatibility with legacy callers but
+// refuses physical deletion because message IDs are durable archive cursors.
+func (s *Store) DeleteAllDeduped() (int64, int64, error) {
+	return 0, 0, ErrMessagesInsertOnly
 }
 
 func (s *Store) CountActiveMessages(sourceIDs ...int64) (int64, error) {

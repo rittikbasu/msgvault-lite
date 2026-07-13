@@ -704,9 +704,32 @@ func TestStore_MarkMessageDeletedByGmailID(t *testing.T) {
 	err = f.Store.MarkMessageDeletedByGmailID(true, "gmail-msg-123")
 	require.NoError(t, err, "MarkMessageDeletedByGmailID(permanent)")
 
+	var tombstones int
+	err = f.Store.DB().QueryRow(
+		`SELECT COUNT(*) FROM messages WHERE source_message_id = ? AND deleted_from_source_at IS NOT NULL`,
+		"gmail-msg-123",
+	).Scan(&tombstones)
+	require.NoError(t, err, "count permanent deletion tombstone")
+	assert.Equal(t, 1, tombstones, "permanent source deletion must retain the archive row")
+
 	// Non-existent message should not error (no rows affected is OK)
 	err = f.Store.MarkMessageDeletedByGmailID(true, "nonexistent-id")
 	require.NoError(t, err, "MarkMessageDeletedByGmailID(nonexistent)")
+}
+
+func TestStore_MessagesRejectPhysicalDelete(t *testing.T) {
+	f := storetest.New(t)
+	messageID := f.CreateMessage("insert-only-message")
+
+	_, err := f.Store.DB().Exec(f.Store.Rebind(`DELETE FROM messages WHERE id = ?`), messageID)
+	require.Error(t, err, "physical message deletion must be rejected")
+
+	msg, err := f.Store.GetMessage(messageID)
+	require.NoError(t, err, "GetMessage after rejected delete")
+	require.NotNil(t, msg, "message row must remain after rejected delete")
+
+	assert.Equal(t, messageID, f.CreateMessage("insert-only-message"), "upsert must preserve archive ID")
+	assert.Greater(t, f.CreateMessage("next-message"), messageID, "new archive IDs must increase")
 }
 
 func TestStore_MarkMessagesDeletedByGmailIDBatch(t *testing.T) {

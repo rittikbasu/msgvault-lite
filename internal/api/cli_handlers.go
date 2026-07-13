@@ -1121,85 +1121,14 @@ func (s *Server) planCLIDeleteDeduped(req cliDeleteDedupedPlanRequest) (cliDelet
 }
 
 func (s *Server) executeCLIDeleteDeduped(req cliDeleteDedupedExecuteRequest) (cliDeleteDedupedExecuteResponse, error) {
-	dedupStore, apiErr := s.cliDedupDeleteStore()
-	if apiErr != nil {
-		return cliDeleteDedupedExecuteResponse{}, apiErr
-	}
-
-	plan, err := planCLIDeleteDedupedWith(dedupStore, req.scope())
-	if err != nil {
-		return cliDeleteDedupedExecuteResponse{}, s.cliDedupDeleteError(err)
-	}
 	if err := validateCLIDeleteDedupedExpectations(req); err != nil {
 		return cliDeleteDedupedExecuteResponse{}, s.cliDedupDeleteError(err)
 	}
-	if *req.ExpectedTotal != plan.Total {
-		return cliDeleteDedupedExecuteResponse{}, newAPIHTTPError(
-			http.StatusConflict,
-			"dedup_delete_plan_changed",
-			"Dedup deletion plan changed; rerun delete-deduped",
-		)
-	}
-	if *req.ExpectedBatchCount != plan.BatchCount {
-		return cliDeleteDedupedExecuteResponse{}, newAPIHTTPError(
-			http.StatusConflict,
-			"dedup_delete_plan_changed",
-			"Dedup deletion plan changed; rerun delete-deduped",
-		)
-	}
-	if !req.AllHidden {
-		if !dedupExpectedBatchesMatch(req.ExpectedBatches, plan.Batches) {
-			return cliDeleteDedupedExecuteResponse{}, dedupDeletePlanChangedError()
-		}
-	}
-	if plan.Total == 0 {
-		return cliDeleteDedupedExecuteResponse{BatchCount: plan.BatchCount}, nil
-	}
-
-	var backupPath string
-	if !req.NoBackup {
-		backupPath, err = s.deleteDedupedBackupPath()
-		if err != nil {
-			return cliDeleteDedupedExecuteResponse{}, newAPIHTTPError(
-				http.StatusInternalServerError,
-				"dedup_backup_failed",
-				fmt.Sprintf("Backup database failed: %v", err),
-			)
-		}
-		if err := dedupStore.BackupDatabase(backupPath); err != nil {
-			return cliDeleteDedupedExecuteResponse{}, newAPIHTTPError(
-				http.StatusInternalServerError,
-				"dedup_backup_failed",
-				fmt.Sprintf("Backup database failed: %v", err),
-			)
-		}
-	}
-
-	var deletedTotal int64
-	var batchCount int64
-	if req.AllHidden {
-		deleted, distinct, err := dedupStore.DeleteAllDeduped()
-		if err != nil {
-			return cliDeleteDedupedExecuteResponse{}, fmt.Errorf("delete all dedup-hidden: %w", err)
-		}
-		deletedTotal = deleted
-		batchCount = distinct
-	} else {
-		batchCount = int64(len(req.BatchIDs))
-		for _, id := range req.BatchIDs {
-			deleted, err := dedupStore.DeleteDedupedBatch(id)
-			if err != nil {
-				return cliDeleteDedupedExecuteResponse{}, fmt.Errorf("delete dedup batch %q: %w", id, err)
-			}
-			deletedTotal += deleted
-		}
-	}
-
-	return cliDeleteDedupedExecuteResponse{
-		Deleted:    deletedTotal,
-		BatchCount: batchCount,
-		BackupPath: backupPath,
-	}, nil
+	return cliDeleteDedupedExecuteResponse{}, newAPIHTTPError(
+		http.StatusConflict,
+		"messages_insert_only",
+		store.ErrMessagesInsertOnly.Error(),
+	)
 }
 
 func planCLIDeleteDedupedWith(

@@ -364,7 +364,7 @@ func (d *PostgreSQLDialect) EnsureFTSIndex(q querier) error {
 	return nil
 }
 
-// EnsureTriggers creates the last_modified maintenance triggers idempotently.
+// EnsureTriggers creates the archive-integrity and last_modified triggers idempotently.
 // Two triggers feed messages.last_modified:
 //
 //   - trg_messages_last_modified (BEFORE UPDATE on messages): sets
@@ -375,6 +375,8 @@ func (d *PostgreSQLDialect) EnsureFTSIndex(q querier) error {
 //   - trg_message_bodies_last_modified (AFTER INSERT OR UPDATE on
 //     message_bodies): bumps the parent message's last_modified so body
 //     edits move the worker's CAS token too.
+//   - messages_reject_delete (BEFORE DELETE on messages): preserves message
+//     IDs and child archive rows by rejecting physical deletion.
 //
 // CREATE TRIGGER is not idempotent before PG14, so each trigger is dropped
 // (IF EXISTS) and recreated; the functions use CREATE OR REPLACE. Re-running
@@ -403,10 +405,19 @@ func (d *PostgreSQLDialect) EnsureTriggers(q querier) error {
 		`CREATE TRIGGER trg_message_bodies_last_modified
 		     AFTER INSERT OR UPDATE ON message_bodies FOR EACH ROW
 		     EXECUTE FUNCTION bump_message_last_modified()`,
+		`CREATE OR REPLACE FUNCTION reject_message_delete() RETURNS trigger AS $$
+		 BEGIN
+		     RAISE EXCEPTION 'message rows are insert-only';
+		 END;
+		 $$ LANGUAGE plpgsql`,
+		`DROP TRIGGER IF EXISTS messages_reject_delete ON messages`,
+		`CREATE TRIGGER messages_reject_delete
+		     BEFORE DELETE ON messages FOR EACH ROW
+		     EXECUTE FUNCTION reject_message_delete()`,
 	}
 	for _, stmt := range stmts {
 		if _, err := q.Exec(stmt); err != nil {
-			return fmt.Errorf("ensure last_modified triggers: %w", err)
+			return fmt.Errorf("ensure database triggers: %w", err)
 		}
 	}
 	return nil

@@ -171,10 +171,9 @@ func TestAttachment_E2E_MultiMessageDedup(t *testing.T) {
 	assert.True(referenced, "expected referenced=true while messages still hold the hash")
 }
 
-// TestAttachment_E2E_CascadeOnMessageDelete verifies that deleting a message
-// row removes its attachment row via ON DELETE CASCADE — but leaves other
-// messages' attachment rows that reference the same content_hash intact.
-func TestAttachment_E2E_CascadeOnMessageDelete(t *testing.T) {
+// TestAttachment_E2E_TombstoneRetainsArchivedAttachments verifies that source
+// deletion tombstones retain both message and attachment archive rows.
+func TestAttachment_E2E_TombstoneRetainsArchivedAttachments(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
 	c := newAttachmentCorpus(t)
@@ -190,25 +189,25 @@ func TestAttachment_E2E_CascadeOnMessageDelete(t *testing.T) {
 
 	assert.Equal(3, c.attachmentRowCount(), "initial attachment count")
 
-	// Permanently delete msg-1; its attachment row cascades.
+	// A permanent source deletion tombstones msg-1 without deleting its archive.
 	err := c.store.MarkMessageDeletedByGmailID(true, "msg-1")
 	require.NoError(err, "MarkMessageDeletedByGmailID(permanent, msg-1)")
 
-	assert.Equal(1, c.attachmentRowsForHash(hashShared), "rows for hashShared after delete")
+	assert.Equal(2, c.attachmentRowsForHash(hashShared), "archived attachment rows after delete")
 
 	// The shared storage path is still referenced (msg-2 holds it).
 	referenced, err := c.store.IsAttachmentPathReferenced(hashShared[:2] + "/" + hashShared)
 	require.NoError(err, "IsAttachmentPathReferenced")
 	assert.True(referenced, "shared path should remain referenced via msg-2 after msg-1 delete")
 
-	// Now delete the last referrer of hashShared.
+	// Tombstoning every source copy still retains both archived references.
 	err = c.store.MarkMessageDeletedByGmailID(true, "msg-2")
 	require.NoError(err, "MarkMessageDeletedByGmailID(permanent, msg-2)")
-	assert.Equal(0, c.attachmentRowsForHash(hashShared), "rows for hashShared after both deleted")
+	assert.Equal(2, c.attachmentRowsForHash(hashShared), "archived rows after both deleted")
 
 	referenced, err = c.store.IsAttachmentPathReferenced(hashShared[:2] + "/" + hashShared)
 	require.NoError(err, "IsAttachmentPathReferenced after both deleted")
-	assert.False(referenced, "shared path should be unreferenced after both messages deleted")
+	assert.True(referenced, "shared path should remain referenced by tombstoned archive rows")
 }
 
 // NULL content_hash or empty storage_path are excluded from

@@ -163,7 +163,7 @@ func TestEmbedGen_OrphanImpossibleAndCoverage(t *testing.T) {
 	assert.False(embedGen.Valid, "subject change must clear embed_gen")
 }
 
-func TestMigrateSourceMessageIDRepointsRepliesBeforeDeletingDuplicate(t *testing.T) {
+func TestMigrateSourceMessageIDRepointsRepliesAndHidesDuplicate(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
 	st := testutil.NewTestStore(t)
@@ -196,13 +196,13 @@ func TestMigrateSourceMessageIDRepointsRepliesBeforeDeletingDuplicate(t *testing
 	require.True(replyTo.Valid, "reply_to_message_id should remain set")
 	assert.Equal(scopedParentID, replyTo.Int64, "reply should point at scoped parent")
 
-	var legacyCount int
+	var legacyDeletedAt sql.NullTime
 	err = st.DB().QueryRow(
-		st.Rebind(`SELECT COUNT(*) FROM messages WHERE id = ?`),
+		st.Rebind(`SELECT deleted_at FROM messages WHERE id = ?`),
 		legacyParentID,
-	).Scan(&legacyCount)
-	require.NoError(err, "legacy count")
-	assert.Equal(0, legacyCount, "legacy duplicate should be deleted")
+	).Scan(&legacyDeletedAt)
+	require.NoError(err, "legacy duplicate should remain archived")
+	assert.True(legacyDeletedAt.Valid, "legacy duplicate should be hidden")
 }
 
 func TestMigrateSourceMessageIDClearsTombstoneWhenRenamingLegacyRow(t *testing.T) {

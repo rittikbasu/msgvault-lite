@@ -712,12 +712,9 @@ func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) 
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close temp token file: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := fileutil.ReplaceFile(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename temp token file: %w", err)
-	}
-	if err := fileutil.SyncDir(m.tokensDir); err != nil {
-		return fmt.Errorf("sync token directory: %w", err)
+		return fmt.Errorf("replace token file: %w", err)
 	}
 	return nil
 }

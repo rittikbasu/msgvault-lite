@@ -5,16 +5,16 @@ package fileutil
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// ReadPrivateFile reads a regular file while rejecting a final-path symbolic
-// link and a path swap between inspection and open. Windows has no POSIX
-// owner/mode bits; write helpers apply owner-only DACLs separately.
+// ReadPrivateFile reads a regular file owned by the current user and protected
+// by a current-user-only DACL. It rejects a final-path symbolic link and a path
+// swap between inspection and open.
 func ReadPrivateFile(path string) ([]byte, error) {
 	before, err := os.Lstat(path)
 	if err != nil {
@@ -22,6 +22,9 @@ func ReadPrivateFile(path string) ([]byte, error) {
 	}
 	if before.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("refuse to read symbolic link: %s", path)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("private file is not a regular file: %s", path)
 	}
 
 	f, err := os.Open(path)
@@ -40,162 +43,233 @@ func ReadPrivateFile(path string) ([]byte, error) {
 	if !after.Mode().IsRegular() {
 		return nil, fmt.Errorf("private file is not a regular file: %s", path)
 	}
+	if err := validatePrivateHandle(f, path); err != nil {
+		return nil, err
+	}
 
 	return io.ReadAll(f)
 }
 
-// SyncDir is a no-op on Windows, where directory flushing requires
-// platform-specific handles and has no portable Go equivalent.
+func validatePrivateHandle(f *os.File, path string) error {
+	sd, err := windows.GetSecurityInfo(
+		windows.Handle(f.Fd()),
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return fmt.Errorf("inspect private file security for %s: %w", path, err)
+	}
+	if sd == nil {
+		return fmt.Errorf("private file has no security descriptor: %s", path)
+	}
+
+	currentUser, err := currentUserSID()
+	if err != nil {
+		return fmt.Errorf("inspect current user for %s: %w", path, err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("inspect private file owner for %s: %w", path, err)
+	}
+	if owner == nil || !owner.Equals(currentUser) {
+		return fmt.Errorf("private file is not owned by the current user: %s", path)
+	}
+
+	control, _, err := sd.Control()
+	if err != nil {
+		return fmt.Errorf("inspect private file DACL control for %s: %w", path, err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return fmt.Errorf("private file DACL inherits access: %s", path)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return fmt.Errorf("private file has no restrictive DACL: %s", path)
+	}
+	if dacl.AceCount != 1 {
+		return fmt.Errorf("private file DACL grants access to multiple principals: %s", path)
+	}
+
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(dacl, 0, &ace); err != nil {
+		return fmt.Errorf("inspect private file DACL entry for %s: %w", path, err)
+	}
+	if ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+		return fmt.Errorf("private file DACL does not grant current-user access: %s", path)
+	}
+	aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	if !aceSID.Equals(currentUser) {
+		return fmt.Errorf("private file DACL grants access to another principal: %s", path)
+	}
+	return nil
+}
+
+// SyncDir is retained for callers that only need a portable best effort.
+// Durable replacement on Windows uses ReplaceFile instead.
 func SyncDir(_ string) error {
 	return nil
 }
 
-// isOwnerOnly returns true if the permission mode grants nothing to group or other.
-func isOwnerOnly(perm os.FileMode) bool {
-	return perm&0077 == 0
+// ReplaceFile atomically replaces target with temp and asks Windows to flush
+// the move to disk before reporting success.
+func ReplaceFile(temp, target string) error {
+	from, err := windows.UTF16PtrFromString(temp)
+	if err != nil {
+		return err
+	}
+	to, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		return err
+	}
+	return windows.MoveFileEx(
+		from,
+		to,
+		windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH,
+	)
 }
 
-// restrictToCurrentUser sets a DACL on path that grants GENERIC_ALL only to
-// the current user and blocks inherited ACEs. For directories, the DACL
-// includes CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE so that child files
-// and subdirectories automatically inherit the restriction. Errors are
-// returned to the caller; the file was already created with the requested
-// Unix mode, so callers may treat DACL failures as non-fatal warnings.
-func restrictToCurrentUser(path string) error {
-	token := windows.GetCurrentProcessToken()
+func isOwnerOnly(perm os.FileMode) bool {
+	return perm&0o077 == 0
+}
 
-	user, err := token.GetTokenUser()
+func currentUserSID() (*windows.SID, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	return user.User.Sid, nil
+}
+
+// restrictToCurrentUser sets a protected DACL that grants GENERIC_ALL only to
+// the current user. Directories propagate the restriction to children.
+func restrictToCurrentUser(path string) error {
+	userSID, err := currentUserSID()
 	if err != nil {
 		return fmt.Errorf("fileutil: get current user SID for %s: %w", path, err)
 	}
 
-	trustee := windows.TrusteeValueFromSID(user.User.Sid)
-
-	// For directories, enable inheritance so children get the same restriction.
-	// For files, NO_INHERITANCE is correct (files don't have children).
-	var inherit uint32 = windows.NO_INHERITANCE
-	info, statErr := os.Stat(path)
-	if statErr == nil && info.IsDir() {
+	inherit := uint32(windows.NO_INHERITANCE)
+	if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
 		inherit = windows.CONTAINER_INHERIT_ACE | windows.OBJECT_INHERIT_ACE
 	}
 
-	ea := []windows.EXPLICIT_ACCESS{
-		{
-			AccessPermissions: windows.GENERIC_ALL,
-			AccessMode:        windows.SET_ACCESS,
-			Inheritance:       inherit,
-			Trustee: windows.TRUSTEE{
-				TrusteeForm:  windows.TRUSTEE_IS_SID,
-				TrusteeType:  windows.TRUSTEE_IS_USER,
-				TrusteeValue: trustee,
-			},
+	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.SET_ACCESS,
+		Inheritance:       inherit,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_USER,
+			TrusteeValue: windows.TrusteeValueFromSID(userSID),
 		},
-	}
-
-	acl, err := windows.ACLFromEntries(ea, nil)
+	}}, nil)
 	if err != nil {
 		return fmt.Errorf("fileutil: build ACL for %s: %w", path, err)
 	}
 
 	secInfo := windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION
-	err = windows.SetNamedSecurityInfo(
+	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
 		windows.SECURITY_INFORMATION(secInfo),
-		nil, // owner SID (unchanged)
-		nil, // group SID (unchanged)
-		acl, // DACL
-		nil, // SACL (unchanged)
-	)
-	if err != nil {
+		nil,
+		nil,
+		acl,
+		nil,
+	); err != nil {
 		return fmt.Errorf("fileutil: set DACL on %s: %w", path, err)
 	}
 	return nil
 }
 
 // SecureWriteFile writes data to the named file, creating it if necessary.
-// For owner-only modes, a DACL restricting access to the current user is applied.
-// DACL failures are logged as warnings but do not fail the write.
+// Owner-only DACL failures are fatal.
 func SecureWriteFile(path string, data []byte, perm os.FileMode) error {
-	if err := os.WriteFile(path, data, perm); err != nil {
+	if !isOwnerOnly(perm) {
+		return os.WriteFile(path, data, perm)
+	}
+
+	// Do not truncate or write sensitive bytes until the DACL is in place.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, perm)
+	if err != nil {
 		return err
 	}
-	if isOwnerOnly(perm) {
-		if err := restrictToCurrentUser(path); err != nil {
-			slog.Warn("fileutil: best-effort DACL failed", "path", path, "err", err)
-		}
+	if err := restrictToCurrentUser(path); err != nil {
+		_ = f.Close()
+		return err
 	}
-	return nil
+	if err := f.Truncate(0); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
-// SecureMkdirAll creates a directory path and all parents that do not yet exist.
-// For owner-only modes, a DACL restricting access to the current user is applied
-// to the leaf directory and every intermediate directory that was created.
+// SecureMkdirAll creates a directory path and all missing parents.
+// Owner-only DACL failures are fatal.
 func SecureMkdirAll(path string, perm os.FileMode) error {
-	// Determine which directories already exist before creating.
 	var toSecure []string
 	if isOwnerOnly(perm) {
-		p := filepath.Clean(path)
-		for p != "" && p != "." && p != string(filepath.Separator) {
+		for p := filepath.Clean(path); p != "" && p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
 			if _, err := os.Stat(p); err == nil {
-				break // already exists, stop climbing
-			}
-			toSecure = append(toSecure, p)
-			parent := filepath.Dir(p)
-			if parent == p {
 				break
 			}
-			p = parent
+			toSecure = append(toSecure, p)
+			if filepath.Dir(p) == p {
+				break
+			}
 		}
 	}
 
 	if err := os.MkdirAll(path, perm); err != nil {
 		return err
 	}
-
-	// Secure all newly created directories (leaf-first order, but order doesn't matter).
 	for _, dir := range toSecure {
 		if err := restrictToCurrentUser(dir); err != nil {
-			slog.Warn("fileutil: best-effort DACL failed", "path", dir, "err", err)
+			return err
 		}
 	}
 	return nil
 }
 
-// SecureChmod changes the mode of the named file.
-// For owner-only modes, a DACL restricting access to the current user is applied.
-// DACL failures are logged as warnings but do not fail the chmod.
+// SecureChmod changes the mode and applies a current-user-only DACL for
+// owner-only modes. DACL failures are fatal.
 func SecureChmod(path string, perm os.FileMode) error {
 	if err := os.Chmod(path, perm); err != nil {
 		return err
 	}
 	if isOwnerOnly(perm) {
-		if err := restrictToCurrentUser(path); err != nil {
-			slog.Warn("fileutil: best-effort DACL failed", "path", path, "err", err)
-		}
+		return restrictToCurrentUser(path)
 	}
 	return nil
 }
 
-// SecureOpenFile opens the named file with specified flag and permissions.
-// For owner-only modes when O_CREATE is set, a DACL restricting access to
-// the current user is applied — regardless of whether the file already existed.
-// This is intentional: all callers write sensitive data (email content,
-// attachments) that should be owner-only.
-//
-// Note: on Windows there is a small TOCTOU window between file creation and
-// DACL application because SetNamedSecurityInfo operates by path after the
-// file is already open. The window is very brief and exploitation would
-// require local access, so this is acceptable for the threat model.
-// DACL failures are logged as warnings but do not fail the open.
+// SecureOpenFile opens the named file and applies a current-user-only DACL
+// when creating with an owner-only mode. DACL failures close the file and fail.
 func SecureOpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
-	f, err := os.OpenFile(path, flag, perm)
+	ownerOnlyCreate := isOwnerOnly(perm) && flag&os.O_CREATE != 0
+	openFlag := flag
+	if ownerOnlyCreate {
+		openFlag &^= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, openFlag, perm)
 	if err != nil {
 		return nil, err
 	}
-	if isOwnerOnly(perm) && (flag&os.O_CREATE != 0) {
+	if ownerOnlyCreate {
 		if err := restrictToCurrentUser(path); err != nil {
-			slog.Warn("fileutil: best-effort DACL failed", "path", path, "err", err)
+			_ = f.Close()
+			return nil, err
+		}
+		if flag&os.O_TRUNC != 0 {
+			if err := f.Truncate(0); err != nil {
+				_ = f.Close()
+				return nil, err
+			}
 		}
 	}
 	return f, nil

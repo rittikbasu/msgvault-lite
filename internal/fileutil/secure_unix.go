@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build unix
 
 // Package fileutil provides cross-platform secure file helpers.
 //
@@ -12,7 +12,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // ReadPrivateFile reads a regular file owned by the current user with no
@@ -26,11 +29,15 @@ func ReadPrivateFile(path string) ([]byte, error) {
 	if before.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("refuse to read symbolic link: %s", path)
 	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("private file is not a regular file: %s", path)
+	}
 
-	f, err := os.Open(path)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
+	f := os.NewFile(uintptr(fd), path)
 	defer func() { _ = f.Close() }()
 
 	after, err := f.Stat()
@@ -71,6 +78,15 @@ func SyncDir(path string) error {
 		return err
 	}
 	return dir.Close()
+}
+
+// ReplaceFile atomically replaces target with temp and flushes the containing
+// directory so the rename survives a crash after success is reported.
+func ReplaceFile(temp, target string) error {
+	if err := os.Rename(temp, target); err != nil {
+		return err
+	}
+	return SyncDir(filepath.Dir(target))
 }
 
 // SecureWriteFile writes data to the named file, creating it if necessary.

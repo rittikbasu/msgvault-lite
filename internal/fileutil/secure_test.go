@@ -151,7 +151,7 @@ func TestSecureOpenFile_ReadOnly(t *testing.T) {
 func TestReadPrivateFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "private.json")
-	require.NoError(t, os.WriteFile(path, []byte("private"), 0600))
+	require.NoError(t, SecureWriteFile(path, []byte("private"), 0600))
 
 	got, err := ReadPrivateFile(path)
 	require.NoError(t, err)
@@ -189,4 +189,19 @@ func TestReadPrivateFileRejectsGroupOrWorldAccess(t *testing.T) {
 
 func TestSyncDir(t *testing.T) {
 	require.NoError(t, SyncDir(t.TempDir()))
+}
+
+func TestReplaceFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "token.json")
+	temp := filepath.Join(dir, ".token.tmp")
+	require.NoError(t, SecureWriteFile(target, []byte("old"), 0600))
+	require.NoError(t, SecureWriteFile(temp, []byte("new"), 0600))
+
+	require.NoError(t, ReplaceFile(temp, target))
+	got, err := ReadPrivateFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("new"), got)
+	_, err = os.Stat(temp)
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }

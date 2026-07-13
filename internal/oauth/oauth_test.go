@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/msgvault/internal/fileutil"
 	"golang.org/x/oauth2"
 )
 
@@ -126,7 +127,7 @@ func writeTokenFile(t *testing.T, mgr *Manager, email string, token oauth2.Token
 	}
 	data, err := json.Marshal(tf)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, email+".json"), data, 0600))
+	require.NoError(t, fileutil.SecureWriteFile(filepath.Join(mgr.tokensDir, email+".json"), data, 0600))
 }
 
 func TestLoadTokenFileRejectsSymlink(t *testing.T) {
@@ -159,7 +160,7 @@ func TestTokenSourceRejectsWrongOAuthClient(t *testing.T) {
 	}
 	data, err := json.Marshal(tf)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, "user@gmail.com.json"), data, 0600))
+	require.NoError(t, fileutil.SecureWriteFile(filepath.Join(mgr.tokensDir, "user@gmail.com.json"), data, 0600))
 
 	_, err = mgr.TokenSource(context.Background(), "user@gmail.com")
 	require.Error(t, err)
@@ -170,7 +171,7 @@ func writeLegacyTokenFile(t *testing.T, mgr *Manager, email string, token oauth2
 	t.Helper()
 	data, err := json.Marshal(token)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, email+".json"), data, 0600))
+	require.NoError(t, fileutil.SecureWriteFile(filepath.Join(mgr.tokensDir, email+".json"), data, 0600))
 }
 
 var testToken = oauth2.Token{AccessToken: "test", TokenType: "Bearer"}
@@ -345,7 +346,9 @@ func TestHasScopeMetadata(t *testing.T) {
 		"https://www.googleapis.com/auth/gmail.readonly",
 	})
 	writeLegacyTokenFile(t, mgr, "legacy@gmail.com", testToken)
-	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, "corrupt@gmail.com.json"), []byte("not json"), 0600))
+	require.NoError(t, fileutil.SecureWriteFile(
+		filepath.Join(mgr.tokensDir, "corrupt@gmail.com.json"), []byte("not json"), 0600,
+	))
 
 	tests := []struct {
 		name  string

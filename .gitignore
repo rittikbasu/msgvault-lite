@@ -24,6 +24,15 @@ oauth_client*.json
 # Local development state
 .beads/
 .mcp.json
+/.hermes/
+
+# Local msgvault runtime state
+/config.toml
+/tokens/
+/attachments/
+/analytics/
+/logs/
+/backups/
 
 # Python
 __pycache__/

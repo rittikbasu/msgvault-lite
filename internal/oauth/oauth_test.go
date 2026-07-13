@@ -33,6 +33,31 @@ func setupTestManager(t *testing.T, scopes []string) *Manager {
 	}
 }
 
+const testClientSecrets = `{
+  "installed": {
+    "client_id": "test-client.apps.googleusercontent.com",
+    "client_secret": "test-secret",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "redirect_uris": ["http://localhost"]
+  }
+}`
+
+func TestNewManagerRejectsSymlinkedClientSecrets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	link := filepath.Join(dir, "client.json")
+	require.NoError(t, os.WriteFile(target, []byte(testClientSecrets), 0600))
+	require.NoError(t, os.Symlink(target, link))
+
+	_, err := NewManager(link, filepath.Join(dir, "tokens"), slog.Default())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "symbolic link")
+}
+
 func TestDefaultScopesAreExactGmailReadonly(t *testing.T) {
 	assert.Equal(t,
 		[]string{"https://www.googleapis.com/auth/gmail.readonly"},
@@ -102,6 +127,27 @@ func writeTokenFile(t *testing.T, mgr *Manager, email string, token oauth2.Token
 	data, err := json.Marshal(tf)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(mgr.tokensDir, email+".json"), data, 0600))
+}
+
+func TestLoadTokenFileRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows")
+	}
+	mgr := setupTestManager(t, Scopes)
+	tf := tokenFile{
+		Token:    oauth2.Token{AccessToken: "access"},
+		Scopes:   []string{ScopeGmailReadonly},
+		ClientID: mgr.config.ClientID,
+	}
+	data, err := json.Marshal(tf)
+	require.NoError(t, err)
+	target := filepath.Join(mgr.tokensDir, "target.json")
+	require.NoError(t, os.WriteFile(target, data, 0600))
+	require.NoError(t, os.Symlink(target, filepath.Join(mgr.tokensDir, "user@gmail.com.json")))
+
+	_, err = mgr.loadTokenFile("user@gmail.com")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "symbolic link")
 }
 
 func TestTokenSourceRejectsWrongOAuthClient(t *testing.T) {
@@ -242,6 +288,20 @@ func TestSaveTokenRejectsNonReadonlyScopes(t *testing.T) {
 			assert.False(t, mgr.HasToken("test@gmail.com"))
 		})
 	}
+}
+
+func TestSaveTokenTightensExistingTokensDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not enforced on Windows")
+	}
+	mgr := setupTestManager(t, Scopes)
+	require.NoError(t, os.Chmod(mgr.tokensDir, 0755))
+
+	err := mgr.saveToken("test@gmail.com", &oauth2.Token{AccessToken: "access"}, Scopes)
+	require.NoError(t, err)
+	info, err := os.Stat(mgr.tokensDir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
 }
 
 func TestSaveToken_OverwriteExisting(t *testing.T) {

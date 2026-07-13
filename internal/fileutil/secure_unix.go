@@ -2,12 +2,76 @@
 
 // Package fileutil provides cross-platform secure file helpers.
 //
-// On non-Windows targets, Secure* helpers are thin wrappers over os.* and do
-// not add symlink traversal or TOCTOU protections. On Windows, owner-only
-// modes additionally set a DACL restricting access to the current user.
+// On non-Windows targets, write helpers are thin wrappers over os.* while
+// ReadPrivateFile validates ownership, permissions, and final-path identity.
+// On Windows, owner-only modes additionally set a DACL restricting access to
+// the current user.
 package fileutil
 
-import "os"
+import (
+	"fmt"
+	"io"
+	"os"
+	"syscall"
+)
+
+// ReadPrivateFile reads a regular file owned by the current user with no
+// group or world permissions. It rejects a final-path symbolic link and
+// verifies the opened file is the same inode that was inspected.
+func ReadPrivateFile(path string) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refuse to read symbolic link: %s", path)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	after, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(before, after) {
+		return nil, fmt.Errorf("private file changed while opening: %s", path)
+	}
+	if !after.Mode().IsRegular() {
+		return nil, fmt.Errorf("private file is not a regular file: %s", path)
+	}
+	if after.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf(
+			"private file permissions for %s are too open (%04o); use chmod 600 %s",
+			path, after.Mode().Perm(), path,
+		)
+	}
+	stat, ok := after.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("inspect private file ownership: %s", path)
+	}
+	if stat.Uid != uint32(os.Geteuid()) {
+		return nil, fmt.Errorf("private file is not owned by the current user: %s", path)
+	}
+
+	return io.ReadAll(f)
+}
+
+// SyncDir flushes directory metadata so a preceding rename is durable.
+func SyncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
+}
 
 // SecureWriteFile writes data to the named file, creating it if necessary.
 func SecureWriteFile(path string, data []byte, perm os.FileMode) error {

@@ -392,7 +392,7 @@ func findGmailSource(
 
 func registerAddAccountFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&headless, "headless", false, "Show instructions for headless server setup")
-	cmd.Flags().BoolVar(&forceReauth, "force", false, "Delete existing token and re-authorize")
+	cmd.Flags().BoolVar(&forceReauth, "force", false, "Replace the existing token only after validation")
 	cmd.Flags().StringVar(&accountDisplayName, "display-name", "", "Display name for the account (e.g., \"Work\", \"Personal\")")
 	cmd.Flags().StringVar(&oauthAppName, "oauth-app", "", "Named OAuth app from config (for Google Workspace orgs)")
 	cmd.Flags().BoolVar(&noDefaultIdentityAddAccount, "no-default-identity", false, noDefaultIdentityHelp)

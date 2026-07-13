@@ -64,7 +64,7 @@ type Manager struct {
 
 // NewManager creates an OAuth manager from client secrets.
 func NewManager(clientSecretsPath, tokensDir string, logger *slog.Logger) (*Manager, error) {
-	data, err := os.ReadFile(clientSecretsPath)
+	data, err := fileutil.ReadPrivateFile(clientSecretsPath)
 	if err != nil {
 		return nil, fmt.Errorf("read client secrets: %w", err)
 	}
@@ -580,24 +580,17 @@ type tokenFile struct {
 
 // loadToken loads a saved token for the given email.
 func (m *Manager) loadToken(email string) (*oauth2.Token, error) {
-	path := m.tokenPath(email)
-	data, err := os.ReadFile(path)
+	tf, err := m.loadTokenFile(email)
 	if err != nil {
 		return nil, err
 	}
-
-	var tf tokenFile
-	if err := json.Unmarshal(data, &tf); err != nil {
-		return nil, err
-	}
-
 	return &tf.Token, nil
 }
 
 // loadTokenFile loads the full token file including scope metadata.
 func (m *Manager) loadTokenFile(email string) (*tokenFile, error) {
 	path := m.tokenPath(email)
-	data, err := os.ReadFile(path)
+	data, err := fileutil.ReadPrivateFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -674,6 +667,9 @@ func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) 
 	if err := fileutil.SecureMkdirAll(m.tokensDir, 0700); err != nil {
 		return err
 	}
+	if err := fileutil.SecureChmod(m.tokensDir, 0700); err != nil {
+		return fmt.Errorf("secure token directory: %w", err)
+	}
 
 	tf := tokenFile{
 		Token:    *token,
@@ -702,17 +698,26 @@ func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) 
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write temp token file: %w", err)
 	}
+	if err := fileutil.SecureChmod(tmpPath, 0600); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp token file: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync temp token file: %w", err)
+	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close temp token file: %w", err)
 	}
-	if err := fileutil.SecureChmod(tmpPath, 0600); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("chmod temp token file: %w", err)
-	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename temp token file: %w", err)
+	}
+	if err := fileutil.SyncDir(m.tokensDir); err != nil {
+		return fmt.Errorf("sync token directory: %w", err)
 	}
 	return nil
 }

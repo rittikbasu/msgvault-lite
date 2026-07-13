@@ -18,6 +18,14 @@ import (
 	"go.kenn.io/msgvault/internal/store"
 )
 
+func TestAddAccountForceHelpDescribesValidatedReplacement(t *testing.T) {
+	cmd := newAddAccountCmd()
+	usage := cmd.Flag("force").Usage
+
+	assert.NotContains(t, usage, "Delete existing token")
+	assert.Contains(t, usage, "after validation")
+}
+
 func TestFindGmailSource(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)

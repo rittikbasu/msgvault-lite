@@ -147,3 +147,46 @@ func TestSecureOpenFile_ReadOnly(t *testing.T) {
 	require.NoError(err, "Read")
 	assert.Equal(t, "existing", string(buf[:n]))
 }
+
+func TestReadPrivateFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "private.json")
+	require.NoError(t, os.WriteFile(path, []byte("private"), 0600))
+
+	got, err := ReadPrivateFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("private"), got)
+}
+
+func TestReadPrivateFileRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	link := filepath.Join(dir, "private.json")
+	require.NoError(t, os.WriteFile(target, []byte("private"), 0600))
+	require.NoError(t, os.Symlink(target, link))
+
+	_, err := ReadPrivateFile(link)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "symbolic link")
+}
+
+func TestReadPrivateFileRejectsGroupOrWorldAccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "private.json")
+	require.NoError(t, os.WriteFile(path, []byte("private"), 0600))
+	require.NoError(t, os.Chmod(path, 0644))
+
+	_, err := ReadPrivateFile(path)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "permissions")
+}
+
+func TestSyncDir(t *testing.T) {
+	require.NoError(t, SyncDir(t.TempDir()))
+}

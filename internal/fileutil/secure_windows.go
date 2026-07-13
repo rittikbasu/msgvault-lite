@@ -4,12 +4,51 @@ package fileutil
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 
 	"golang.org/x/sys/windows"
 )
+
+// ReadPrivateFile reads a regular file while rejecting a final-path symbolic
+// link and a path swap between inspection and open. Windows has no POSIX
+// owner/mode bits; write helpers apply owner-only DACLs separately.
+func ReadPrivateFile(path string) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refuse to read symbolic link: %s", path)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	after, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(before, after) {
+		return nil, fmt.Errorf("private file changed while opening: %s", path)
+	}
+	if !after.Mode().IsRegular() {
+		return nil, fmt.Errorf("private file is not a regular file: %s", path)
+	}
+
+	return io.ReadAll(f)
+}
+
+// SyncDir is a no-op on Windows, where directory flushing requires
+// platform-specific handles and has no portable Go equivalent.
+func SyncDir(_ string) error {
+	return nil
+}
 
 // isOwnerOnly returns true if the permission mode grants nothing to group or other.
 func isOwnerOnly(perm os.FileMode) bool {

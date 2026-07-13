@@ -3,10 +3,9 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/msgvault/internal/query"
@@ -59,6 +58,9 @@ Examples:
 		if searchLimit <= 0 {
 			return usageErr(cmd, fmt.Errorf("--limit must be a positive integer, got %d", searchLimit))
 		}
+		if searchLimit > maxJSONPageSize {
+			return usageErr(cmd, fmt.Errorf("--limit must not exceed %d, got %d", maxJSONPageSize, searchLimit))
+		}
 		if searchOffset < 0 {
 			return usageErr(cmd, fmt.Errorf("--offset must be non-negative, got %d", searchOffset))
 		}
@@ -85,29 +87,37 @@ func runSearch(cmd *cobra.Command, queryStr string) error {
 	defer func() { _ = s.Close() }()
 
 	parsed := search.Parse(queryStr)
+	fetchLimit := searchLimit
+	if searchJSON {
+		fetchLimit++
+	}
 	results, err := query.NewSQLiteEngine(s.DB()).Search(
-		cmd.Context(), parsed, searchLimit, searchOffset,
+		cmd.Context(), parsed, fetchLimit, searchOffset,
 	)
 	if err != nil {
 		return query.HintRepairEncoding(fmt.Errorf("search: %w", err))
 	}
 
+	if searchJSON {
+		hasMore := len(results) > searchLimit
+		if hasMore {
+			results = results[:searchLimit]
+		}
+		return outputSearchResultsJSON(cmd.OutOrStdout(), results, hasMore)
+	}
 	if len(results) == 0 {
-		fmt.Println("No messages found.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No messages found.")
 		return nil
 	}
-	if searchJSON {
-		return outputSearchResultsJSON(results)
-	}
-	return outputSearchResultsTable(results)
+	return outputSearchResultsTable(cmd.OutOrStdout(), results)
 }
 
 // nil error return mirrors outputSearchResultsJSON so callers can return
 // either uniformly; tabwriter output never fails.
 //
 //nolint:unparam // symmetry with error-returning outputSearchResultsJSON sibling
-func outputSearchResultsTable(results []query.MessageSummary) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+func outputSearchResultsTable(out io.Writer, results []query.MessageSummary) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "ID\tDATE\tFROM\tSUBJECT\tSIZE")
 	_, _ = fmt.Fprintln(w, "──\t────\t────\t───────\t────")
 
@@ -120,7 +130,7 @@ func outputSearchResultsTable(results []query.MessageSummary) error {
 	}
 
 	_ = w.Flush()
-	fmt.Printf("\n%s\n", formatShowingResults(len(results)))
+	_, _ = fmt.Fprintf(out, "\n%s\n", formatShowingResults(len(results)))
 	return nil
 }
 
@@ -133,32 +143,26 @@ func summaryFromDisplay(msg query.MessageSummary) string {
 	return ""
 }
 
-func outputSearchResultsJSON(results []query.MessageSummary) error {
-	output := make([]map[string]any, len(results))
+func outputSearchResultsJSON(out io.Writer, results []query.MessageSummary, hasMore bool) error {
+	items := make([]jsonMessageSummary, len(results))
 	for i, msg := range results {
-		output[i] = map[string]any{
-			"id":                     msg.ID,
-			"source_message_id":      msg.SourceMessageID,
-			"conversation_id":        msg.ConversationID,
-			"source_conversation_id": msg.SourceConversationID,
-			"subject":                msg.Subject,
-			"snippet":                msg.Snippet,
-			"from_email":             msg.FromEmail,
-			"from_name":              msg.FromName,
-			"sent_at":                msg.SentAt.Format(time.RFC3339),
-			"size_estimate":          msg.SizeEstimate,
-			"has_attachments":        msg.HasAttachments,
-			"attachment_count":       msg.AttachmentCount,
-			"labels":                 msg.Labels,
-		}
+		items[i] = queryMessageSummary(msg)
 	}
-
-	return printJSON(output)
+	return writeJSON(out, jsonListResponse{
+		SchemaVersion: jsonSchemaVersion,
+		Items:         items,
+		Page: jsonPage{
+			Limit:    searchLimit,
+			Offset:   searchOffset,
+			Returned: len(items),
+			HasMore:  hasMore,
+		},
+	})
 }
 
 func init() {
 	rootCmd.AddCommand(searchCmd)
-	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 50, "Maximum number of results")
+	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 50, "Maximum number of results (max 200)")
 	searchCmd.Flags().IntVar(&searchOffset, "offset", 0, "Skip first N results")
-	searchCmd.Flags().BoolVar(&searchJSON, flagJSON, false, "Output as JSON")
+	searchCmd.Flags().BoolVar(&searchJSON, flagJSON, false, "Output stable JSON schema v1")
 }

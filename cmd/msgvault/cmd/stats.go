@@ -8,6 +8,8 @@ import (
 	"go.kenn.io/msgvault/internal/store"
 )
 
+var statsJSON bool
+
 var statsCmd = &cobra.Command{
 	Use:     "status",
 	Aliases: []string{"stats"},
@@ -25,7 +27,7 @@ func runStats(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	dbStats, err := s.GetStats()
+	dbStats, err := s.GetStatsContext(cmd.Context())
 	if err != nil {
 		logger.Warn("stats failed", "error", err.Error())
 		return fmt.Errorf("get stats: %w", err)
@@ -38,6 +40,22 @@ func runStats(cmd *cobra.Command, _ []string) error {
 		"accounts", dbStats.SourceCount,
 		"db_bytes", dbStats.DatabaseSize,
 	)
+	if statsJSON {
+		return writeJSON(out, jsonStatusResponse{
+			SchemaVersion: jsonSchemaVersion,
+			Database:      cfg.DatabaseDSN(),
+			Messages: jsonMessageCounts{
+				Total:             dbStats.MessageCount + dbStats.SourceDeletedCount,
+				Active:            dbStats.MessageCount,
+				DeletedFromSource: dbStats.SourceDeletedCount,
+			},
+			Threads:       dbStats.ThreadCount,
+			Attachments:   dbStats.AttachmentCount,
+			Labels:        dbStats.LabelCount,
+			Accounts:      dbStats.SourceCount,
+			DatabaseBytes: dbStats.DatabaseSize,
+		})
+	}
 
 	_, _ = fmt.Fprintf(out, "Database: %s\n", cfg.DatabaseDSN())
 
@@ -62,4 +80,5 @@ func printStats(w io.Writer, s *store.Stats) {
 
 func init() {
 	rootCmd.AddCommand(statsCmd)
+	statsCmd.Flags().BoolVar(&statsJSON, flagJSON, false, "Output stable JSON schema v1")
 }

@@ -13,6 +13,7 @@ import (
 var (
 	messagesLimit  int
 	messagesOffset int
+	messagesJSON   bool
 )
 
 var messagesCmd = &cobra.Command{
@@ -23,6 +24,9 @@ var messagesCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if messagesLimit <= 0 {
 			return usageErr(cmd, fmt.Errorf("--limit must be a positive integer, got %d", messagesLimit))
+		}
+		if messagesLimit > maxJSONPageSize {
+			return usageErr(cmd, fmt.Errorf("--limit must not exceed %d, got %d", maxJSONPageSize, messagesLimit))
 		}
 		if messagesOffset < 0 {
 			return usageErr(cmd, fmt.Errorf("--offset must be non-negative, got %d", messagesOffset))
@@ -41,6 +45,23 @@ func runMessages(cmd *cobra.Command) error {
 	messages, total, err := s.ListMessagesContext(cmd.Context(), messagesOffset, messagesLimit)
 	if err != nil {
 		return fmt.Errorf("list messages: %w", err)
+	}
+	if messagesJSON {
+		items := make([]jsonMessageSummary, len(messages))
+		for i, message := range messages {
+			items[i] = apiMessageSummary(message)
+		}
+		return writeJSON(cmd.OutOrStdout(), jsonListResponse{
+			SchemaVersion: jsonSchemaVersion,
+			Items:         items,
+			Page: jsonPage{
+				Limit:    messagesLimit,
+				Offset:   messagesOffset,
+				Returned: len(items),
+				Total:    &total,
+				HasMore:  int64(messagesOffset+len(items)) < total,
+			},
+		})
 	}
 	if len(messages) == 0 {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No messages found.")
@@ -78,6 +99,7 @@ func outputMessagesTable(out io.Writer, messages []store.APIMessage, total int64
 
 func init() {
 	rootCmd.AddCommand(messagesCmd)
-	messagesCmd.Flags().IntVarP(&messagesLimit, "limit", "n", 50, "Maximum number of messages")
+	messagesCmd.Flags().IntVarP(&messagesLimit, "limit", "n", 50, "Maximum number of messages (max 200)")
 	messagesCmd.Flags().IntVar(&messagesOffset, "offset", 0, "Skip first N messages")
+	messagesCmd.Flags().BoolVar(&messagesJSON, flagJSON, false, "Output stable JSON schema v1")
 }

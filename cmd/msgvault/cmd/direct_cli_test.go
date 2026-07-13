@@ -57,15 +57,15 @@ func TestSearchReadsSQLiteDirectly(t *testing.T) {
 	})
 	searchLimit, searchOffset, searchJSON = 10, 0, true
 
-	stop := captureStdout(t)
+	var out bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
 	err := runSearch(cmd, "subject:Needle")
-	output := stop()
 
 	require.NoError(t, err)
-	assert.Contains(t, output, `"id": `+formatCount(messageID))
-	assert.Contains(t, output, `"subject": "Needle subject"`)
+	assert.Contains(t, out.String(), `"id": `+formatCount(messageID))
+	assert.Contains(t, out.String(), `"subject": "Needle subject"`)
 }
 
 func TestShowMessageReadsSQLiteDirectly(t *testing.T) {
@@ -74,15 +74,15 @@ func TestShowMessageReadsSQLiteDirectly(t *testing.T) {
 	showMessageJSON = true
 	t.Cleanup(func() { showMessageJSON = oldJSON })
 
-	stop := captureStdout(t)
+	var out bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
 	err := runShowMessage(cmd, formatCount(messageID))
-	output := stop()
 
 	require.NoError(t, err)
-	assert.Contains(t, output, `"source_message_id": "gmail-needle-1"`)
-	assert.Contains(t, output, `"body_text": "needle body"`)
+	assert.Contains(t, out.String(), `"source_message_id": "gmail-needle-1"`)
+	assert.Contains(t, out.String(), `"body_text": "needle body"`)
 }
 
 func TestStatsReadsSQLiteDirectly(t *testing.T) {

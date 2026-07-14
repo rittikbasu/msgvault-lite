@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -313,6 +315,26 @@ func TestVerifyAcceptanceRejectsEqualCountIDDifferences(t *testing.T) {
 	err := verifyAcceptanceError(result)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "gmail ID mismatch")
+}
+
+func TestEmitGmailArchiveComparisonPrintsExactSetDifferences(t *testing.T) {
+	t.Parallel()
+
+	comparison := gmailArchiveComparison{
+		gmailTotal:         4,
+		missingFromArchive: 3,
+		extraInArchive:     1,
+	}
+	var output bytes.Buffer
+	emitf := func(format string, args ...any) {
+		_, err := fmt.Fprintf(&output, format, args...)
+		require.NoError(t, err)
+	}
+
+	emitGmailArchiveComparison(emitf, comparison, 2)
+
+	assert.Contains(t, output.String(), "Missing from archive:          3")
+	assert.Contains(t, output.String(), "Extra in archive:              1")
 }
 
 func TestSyncInterruptionErrorPreservesCancellation(t *testing.T) {

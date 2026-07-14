@@ -94,7 +94,7 @@ msgvault verify you@gmail.com
 msgvault verify you@gmail.com --sample 200 --json
 ```
 
-verification runs SQLite integrity checks, compares local and Gmail counts, checks raw MIME coverage, and decompresses a random sample.
+verification runs SQLite integrity checks, compares exact local and Gmail message ID sets (including spam and trash), checks raw MIME coverage, and decompresses a random sample. because Gmail can change during enumeration, retry after syncing if verification reports a transient remote mismatch.
 
 ## backups
 

@@ -96,6 +96,17 @@ func compareGmailArchiveIDs(ctx context.Context, reader gmail.MessageReader, arc
 	return comparison, nil
 }
 
+func emitGmailArchiveComparison(
+	emitf func(format string, args ...any),
+	comparison gmailArchiveComparison,
+	archiveCount int64,
+) {
+	emitf("Gmail messages:       %10d\n", comparison.gmailTotal)
+	emitf("Archived messages:    %10d\n", archiveCount)
+	emitf("Missing from archive: %10d\n", comparison.missingFromArchive)
+	emitf("Extra in archive:     %10d\n", comparison.extraInArchive)
+}
+
 // newVerifyResult assembles the machine-readable summary from the counts
 // gathered during a run. It is separated from the Gmail/database plumbing so
 // the difference and coverage math can be unit-tested without network or
@@ -368,17 +379,8 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 
 	// Print summary
 	gmailTotal := comparison.gmailTotal
-	emitf("Gmail messages:      %10d\n", gmailTotal)
+	emitGmailArchiveComparison(emitf, comparison, archiveCount)
 	emitf("Gmail profile total:  %10d (diagnostic only)\n", profile.MessagesTotal)
-	emitf("Archived messages:   %10d\n", archiveCount)
-	diff := gmailTotal - archiveCount
-	if diff > 0 {
-		emitf("Missing:             %10d\n", diff)
-	} else if diff < 0 {
-		emitf("Extra in archive:    %10d\n", -diff)
-	} else {
-		emitf("Difference:          %10d\n", diff)
-	}
 	emitln()
 
 	rawPct := float64(0)

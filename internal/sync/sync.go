@@ -120,7 +120,7 @@ func (s *Syncer) initSyncState(sourceID int64) (*syncState, error) {
 		if err != nil && !errors.Is(err, store.ErrSyncRunNotFound) {
 			return nil, fmt.Errorf("check active sync: %w", err)
 		}
-		if activeSync != nil {
+		if activeSync != nil && activeSync.SyncKind == store.SyncKindFull {
 			state.syncID = activeSync.ID
 			if activeSync.CursorBefore.Valid {
 				state.pageToken = activeSync.CursorBefore.String
@@ -139,7 +139,11 @@ func (s *Syncer) initSyncState(sourceID int64) (*syncState, error) {
 	}
 
 	// Start new sync
-	syncID, err := s.store.StartSync(sourceID, "full")
+	syncKind := store.SyncKindFull
+	if s.opts.Query != "" {
+		syncKind = store.SyncKindFilteredFull
+	}
+	syncID, err := s.store.StartSync(sourceID, syncKind)
 	if err != nil {
 		return nil, fmt.Errorf("start sync: %w", err)
 	}

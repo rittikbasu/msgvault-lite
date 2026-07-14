@@ -571,4 +571,19 @@ func TestGetTokenSourceWithReauth(t *testing.T) {
 		require.ErrorContains(t, err, "add-account x@gmail.com --force")
 		require.ErrorContains(t, err, "add-account x@gmail.com --headless")
 	})
+
+	t.Run("retry failure is wrapped", func(t *testing.T) {
+		retryErr := errors.New("still broken")
+		mock := &mockReauthorizer{hasTokenVal: true}
+		mock.tokenSourceFn = func(_ context.Context, _ string) (extOAuth2.TokenSource, error) {
+			if mock.tokenSourceCall == 1 {
+				return nil, invalidGrant
+			}
+			return nil, retryErr
+		}
+
+		_, err := getTokenSourceWithReauth(context.Background(), mock, "x@gmail.com", true, gmailReauthHint)
+		require.ErrorIs(t, err, retryErr)
+		assert.Equal(t, "get token source after re-authorization: still broken", err.Error())
+	})
 }

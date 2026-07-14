@@ -1467,6 +1467,31 @@ func TestFullSyncResumeWithCursor(t *testing.T) {
 	assertMessageCount(t, env.Store, 4)
 }
 
+func TestFullSyncDoesNotResumeFilteredCheckpoint(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	env.Mock.Profile.HistoryID = 12345
+	seedPagedMessages(env, 4)
+	source := env.CreateSource(t)
+
+	syncID, err := env.Store.StartSync(source.ID, "full_filtered")
+	require.NoError(err, "StartSync")
+	require.NoError(env.Store.UpdateSyncCheckpoint(syncID, &store.Checkpoint{
+		PageToken:         "page_1",
+		MessagesProcessed: 2,
+		MessagesAdded:     2,
+	}), "UpdateSyncCheckpoint")
+
+	summary := runFullSync(t, env)
+
+	assert.False(summary.WasResumed, "unfiltered sync must not resume a filtered checkpoint")
+	assert.Empty(summary.ResumedFromToken, "ResumedFromToken")
+	assertSummary(t, summary, WantSummary{Added: new(int64(4))})
+	assertListMessagesCalls(t, env, 2)
+	assertMessageCount(t, env.Store, 4)
+}
+
 func TestFullSyncDateFallbackToInternalDate(t *testing.T) {
 	env := newTestEnv(t)
 

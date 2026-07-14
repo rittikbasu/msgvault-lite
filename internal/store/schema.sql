@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     started_at DATETIME NOT NULL,
     completed_at DATETIME,
     status TEXT DEFAULT 'running',  -- 'running', 'completed', 'failed', 'cancelled'
+    sync_kind TEXT NOT NULL CHECK(sync_kind IN ('full', 'full_filtered', 'incremental')),
 
     messages_processed INTEGER DEFAULT 0,
     messages_added INTEGER DEFAULT 0,

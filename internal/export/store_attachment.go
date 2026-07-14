@@ -163,11 +163,9 @@ func StoreAttachmentFile(attachmentsDir string, att *mime.Attachment) (string, e
 		if err := validateExistingAttachmentFile(fullPath, expectedSize, contentHash); err == nil {
 			return storagePath, nil
 		}
-		// The source bytes are authoritative. Remove a corrupt canonical blob
-		// and replace it atomically so a full sync can repair local damage.
-		if err := os.Remove(fullPath); err != nil {
-			return "", fmt.Errorf("remove corrupt attachment file: %w", err)
-		}
+		// The source bytes are authoritative. writeAtomicFile installs a fully
+		// written temporary replacement with one rename; the corrupt destination
+		// remains present if preparation or replacement fails.
 		if err := writeAtomicFile(fullPath, att.Content, expectedSize, contentHash); err != nil {
 			return "", err
 		}

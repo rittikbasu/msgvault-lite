@@ -922,6 +922,32 @@ func (s *Store) CountMessagesForSource(sourceID int64) (int64, error) {
 	return count, err
 }
 
+// LiveMessageSourceIDs returns the provider message IDs currently present for
+// a source. Tombstoned messages are retained in the archive but excluded from
+// remote parity checks.
+func (s *Store) LiveMessageSourceIDs(sourceID int64) ([]string, error) {
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT source_message_id
+		FROM messages
+		WHERE source_id = ? AND %s
+		ORDER BY source_message_id
+	`, LiveMessagesWhere("", true)), sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // CountMessagesWithRaw returns the count of messages that have raw MIME stored.
 func (s *Store) CountMessagesWithRaw(sourceID int64) (int64, error) {
 	var count int64

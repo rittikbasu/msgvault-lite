@@ -28,10 +28,8 @@ var (
 
 // verifyResult is the machine-readable form of a verify run, emitted when
 // --json is set. Difference is gmailTotal-archived: a positive value means
-// Gmail reports more messages than the archive holds; a negative value means
-// the archive holds more than Gmail's profile total reports. Gmail's profile
-// total and the archive policy are not guaranteed to cover identical message
-// sets, so the delta is reported as a signed number rather than as "missing".
+// Gmail's exact ID enumeration has more live messages than the archive; a
+// negative value means the archive has more live messages than Gmail.
 type verifyResult struct {
 	Email                    string `json:"email"`
 	ArchiveAccountFound      bool   `json:"archive_account_found"`
@@ -41,6 +39,8 @@ type verifyResult struct {
 	GmailMessagesTotal int64   `json:"gmail_messages_total"`
 	ArchivedMessages   int64   `json:"archived_messages"`
 	Difference         int64   `json:"difference"`
+	MissingFromArchive int64   `json:"missing_from_archive"`
+	ExtraInArchive     int64   `json:"extra_in_archive"`
 	RawMIMEMessages    int64   `json:"raw_mime_messages"`
 	RawMIMECoveragePct float64 `json:"raw_mime_coverage_percent"`
 
@@ -48,6 +48,52 @@ type verifyResult struct {
 	SampleVerified    int  `json:"sample_verified"`
 	SampleErrors      int  `json:"sample_errors"`
 	SampleInterrupted bool `json:"sample_interrupted"`
+}
+
+type gmailArchiveComparison struct {
+	gmailTotal         int64
+	missingFromArchive int64
+	extraInArchive     int64
+}
+
+func compareGmailArchiveIDs(ctx context.Context, reader gmail.MessageReader, archiveIDs []string) (gmailArchiveComparison, error) {
+	remote := make(map[string]struct{})
+	pageToken := ""
+	seenPageTokens := make(map[string]struct{})
+	for {
+		page, err := reader.ListMessages(ctx, "", pageToken)
+		if err != nil {
+			return gmailArchiveComparison{}, fmt.Errorf("list Gmail messages: %w", err)
+		}
+		for _, message := range page.Messages {
+			remote[message.ID] = struct{}{}
+		}
+		if page.NextPageToken == "" {
+			break
+		}
+		if _, repeated := seenPageTokens[page.NextPageToken]; repeated {
+			return gmailArchiveComparison{}, errors.New("list Gmail messages: repeated page token")
+		}
+		seenPageTokens[page.NextPageToken] = struct{}{}
+		pageToken = page.NextPageToken
+	}
+
+	local := make(map[string]struct{}, len(archiveIDs))
+	for _, id := range archiveIDs {
+		local[id] = struct{}{}
+	}
+	comparison := gmailArchiveComparison{gmailTotal: int64(len(remote))}
+	for id := range remote {
+		if _, found := local[id]; !found {
+			comparison.missingFromArchive++
+		}
+	}
+	for id := range local {
+		if _, found := remote[id]; !found {
+			comparison.extraInArchive++
+		}
+	}
+	return comparison, nil
 }
 
 // newVerifyResult assembles the machine-readable summary from the counts
@@ -83,6 +129,12 @@ func verifyAcceptanceError(result verifyResult) error {
 	if result.DatabaseIntegrityOK != nil && !*result.DatabaseIntegrityOK {
 		return errors.New("database integrity check failed")
 	}
+	if result.MissingFromArchive != 0 || result.ExtraInArchive != 0 {
+		return fmt.Errorf(
+			"gmail ID mismatch: %d missing from archive, %d extra in archive",
+			result.MissingFromArchive, result.ExtraInArchive,
+		)
+	}
 	if result.Difference != 0 {
 		return fmt.Errorf("archive count mismatch: Gmail and archive differ by %d messages", result.Difference)
 	}
@@ -101,12 +153,12 @@ func verifyAcceptanceError(result verifyResult) error {
 var verifyCmd = &cobra.Command{
 	Use:   "verify <email>",
 	Short: "Verify archive integrity against Gmail",
-	Long: `Verify the local archive by comparing message counts with Gmail
+	Long: `Verify the local archive by comparing exact message IDs with Gmail
 and sampling messages to ensure raw MIME data is intact.
 
 This command:
 1. Runs SQLite and attachment-blob integrity checks (unless --skip-db-check)
-2. Compares local message count with Gmail's reported total
+2. Compares local live Gmail IDs with an exact remote enumeration
 3. Checks how many messages have raw MIME data stored
 4. Samples random messages and verifies their MIME can be decompressed
 
@@ -300,6 +352,14 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("count messages: %w", err)
 	}
+	archiveIDs, err := s.LiveMessageSourceIDs(source.ID)
+	if err != nil {
+		return fmt.Errorf("list archived Gmail IDs: %w", err)
+	}
+	comparison, err := compareGmailArchiveIDs(ctx, client, archiveIDs)
+	if err != nil {
+		return err
+	}
 
 	withRaw, err := s.CountMessagesWithRaw(source.ID)
 	if err != nil {
@@ -307,8 +367,9 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print summary
-	gmailTotal := profile.MessagesTotal
+	gmailTotal := comparison.gmailTotal
 	emitf("Gmail messages:      %10d\n", gmailTotal)
+	emitf("Gmail profile total:  %10d (diagnostic only)\n", profile.MessagesTotal)
 	emitf("Archived messages:   %10d\n", archiveCount)
 	diff := gmailTotal - archiveCount
 	if diff > 0 {
@@ -402,6 +463,8 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 		profile.EmailAddress, true, dbIntegrityOK, gmailTotal, archiveCount, withRaw,
 		sampleSize, sampleVerified, sampleErrorCount, sampleInterrupted,
 	)
+	result.MissingFromArchive = comparison.missingFromArchive
+	result.ExtraInArchive = comparison.extraInArchive
 	if verifyJSON {
 		if err := printJSON(result); err != nil {
 			return err

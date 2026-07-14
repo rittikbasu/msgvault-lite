@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/config"
 	"go.kenn.io/msgvault/internal/export"
+	"go.kenn.io/msgvault/internal/gmail"
 	"go.kenn.io/msgvault/internal/store"
 )
 
@@ -281,6 +282,37 @@ func TestVerifyAcceptanceError(t *testing.T) {
 			assert.ErrorContains(t, err, tc.wantErr)
 		})
 	}
+}
+
+func TestCompareGmailArchiveIDsUsesAllPagesAndDetectsEqualCountMismatch(t *testing.T) {
+	t.Parallel()
+
+	api := gmail.NewMockAPI()
+	api.MessagePages = [][]string{
+		{"remote-a", "shared"},
+		{"remote-b"},
+	}
+
+	comparison, err := compareGmailArchiveIDs(
+		context.Background(), api, []string{"local-only", "shared", "remote-b"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), comparison.gmailTotal)
+	assert.Equal(t, int64(1), comparison.missingFromArchive)
+	assert.Equal(t, int64(1), comparison.extraInArchive)
+	assert.Equal(t, 2, api.ListMessagesCalls)
+	assert.Empty(t, api.LastQuery)
+}
+
+func TestVerifyAcceptanceRejectsEqualCountIDDifferences(t *testing.T) {
+	integrityOK := true
+	result := newVerifyResult("user@example.com", true, &integrityOK, 3, 3, 3, 3, 3, 0, false)
+	result.MissingFromArchive = 1
+	result.ExtraInArchive = 1
+
+	err := verifyAcceptanceError(result)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "gmail ID mismatch")
 }
 
 func TestSyncInterruptionErrorPreservesCancellation(t *testing.T) {

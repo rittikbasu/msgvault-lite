@@ -15,8 +15,8 @@ import (
 )
 
 // seedDB creates the minimal msgvault-shaped schema (same shape as the
-// internal/backupapp/testdata/compat fixture) with 2 messages, 2 attachments,
-// 1 thumbnail, one attachment recorded at a non-canonical namespaced path.
+// internal/backupapp/testdata/compat fixture) with 2 messages and 2
+// attachments, one recorded at a non-canonical namespaced path.
 func seedDB(t *testing.T) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "msgvault.db")
@@ -29,14 +29,13 @@ func seedDB(t *testing.T) string {
 		`CREATE TABLE sources (id INTEGER PRIMARY KEY)`,
 		`CREATE TABLE labels (id INTEGER PRIMARY KEY)`,
 		`CREATE TABLE attachments (id INTEGER PRIMARY KEY,
-			content_hash TEXT, storage_path TEXT,
-			thumbnail_hash TEXT, thumbnail_path TEXT, size INTEGER)`,
+			content_hash TEXT, storage_path TEXT, size INTEGER)`,
 		`INSERT INTO messages (sent_at) VALUES
 			('2024-01-01T00:00:00Z'), ('2024-06-01T00:00:00Z')`,
 		`INSERT INTO attachments
-			(content_hash, storage_path, thumbnail_hash, thumbnail_path, size) VALUES
-			('aabb01', 'aa/aabb01', 'ccdd02', 'cc/ccdd02', 10),
-			('eeff03', 'imports/eeff03', NULL, NULL, 20)`,
+			(content_hash, storage_path, size) VALUES
+			('aabb01', 'aa/aabb01', 10),
+			('eeff03', 'imports/eeff03', 20)`,
 	} {
 		_, err := db.Exec(stmt)
 		require.NoError(t, err, "seed: %s", stmt)
@@ -57,7 +56,7 @@ func TestFrozenViewContentInfoAndStats(t *testing.T) {
 
 	info, err := view.ContentInfo(context.Background())
 	require.NoError(err)
-	assert.Len(info.Refs, 3) // 2 content hashes + 1 thumbnail
+	assert.Len(info.Refs, 2)
 	assert.Equal(int64(2), info.Rows)
 	assert.True(info.NonCanonicalPaths) // 'imports/eeff03'
 
@@ -67,7 +66,7 @@ func TestFrozenViewContentInfoAndStats(t *testing.T) {
 	require.NoError(err)
 	assert.Equal(int64(2), stats.Messages)
 	assert.Equal(int64(2), stats.AttachmentRows)
-	assert.Equal(int64(3), stats.AttachmentBlobs)
+	assert.Equal(int64(2), stats.AttachmentBlobs)
 	assert.Equal("2024-01-01T00:00:00Z", stats.DateRange[0])
 
 	// Stats marshaling must be stable: ParseStats→Marshal reproduces raw.

@@ -42,3 +42,63 @@ func TestFreshArchiveUsesForkNativeSchema(t *testing.T) {
 		assert.Zero(count, "retired messages column %s", column)
 	}
 }
+
+func TestFreshArchiveRemovedCompatibilityColumns(t *testing.T) {
+	f := testutil.NewTestStore(t)
+
+	removed := map[string][]string{
+		"sources": {
+			"sync_config",
+		},
+		"participants": {
+			"phone_number", "canonical_id",
+		},
+		"conversations": {
+			"conversation_type", "participant_count", "unread_count",
+			"last_message_at", "last_message_preview", "metadata",
+		},
+		"messages": {
+			"rfc822_message_id", "message_type", "received_at", "read_at",
+			"delivered_at", "is_from_me", "is_read", "is_delivered", "is_sent",
+			"is_edited", "is_forwarded", "reply_to_message_id", "thread_position",
+			"indexing_version", "metadata",
+		},
+		"attachments": {
+			"media_type", "width", "height", "duration_ms", "thumbnail_hash",
+			"thumbnail_path", "attachment_metadata", "encryption_version",
+		},
+		"message_raw": {
+			"encryption_version",
+		},
+		"labels": {
+			"color",
+		},
+	}
+
+	for table, columns := range removed {
+		for _, column := range columns {
+			var count int
+			require.NoError(t, f.DB().QueryRow(
+				`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column,
+			).Scan(&count))
+			assert.Zero(t, count, "%s.%s should not exist", table, column)
+		}
+	}
+
+	_, err := f.DB().Exec(`INSERT INTO sources (id, source_type, identifier) VALUES (1, 'gmail', 'first@example.com')`)
+	require.NoError(t, err)
+	_, err = f.DB().Exec(`INSERT INTO participants (id, email_address) VALUES (1, 'sender@example.com')`)
+	require.NoError(t, err)
+	_, err = f.DB().Exec(`INSERT INTO conversations (id, source_id, source_conversation_id) VALUES (1, 1, 'thread-1')`)
+	require.NoError(t, err)
+	_, err = f.DB().Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id) VALUES (1, 1, 1, 'message-1')`)
+	require.NoError(t, err)
+
+	_, err = f.DB().Exec(`INSERT INTO sources (source_type, identifier) VALUES ('imap', 'imap@example.com')`)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHECK constraint failed")
+
+	_, err = f.DB().Exec(`INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES (1, 1, 'mention')`)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHECK constraint failed")
+}

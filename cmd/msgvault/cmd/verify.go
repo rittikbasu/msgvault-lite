@@ -234,7 +234,7 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	// not the canonical profile address — the source is keyed
 	// under the identifier from add-account. Filter to Gmail
 	// specifically since the same identifier may exist for
-	// other source types (mbox, imap).
+	// another Gmail account.
 	source, err := findGmailSource(s, email)
 	if err != nil && !errors.Is(err, errGmailSourceNotFound) {
 		return fmt.Errorf("get source: %w", err)

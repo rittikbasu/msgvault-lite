@@ -43,7 +43,6 @@ func assertSQLiteBodyHitWins(t *testing.T) {
 			ConversationID:  convID,
 			SourceID:        src.ID,
 			SourceMessageID: label,
-			MessageType:     "email",
 			Subject:         nullString(subject),
 			Snippet:         nullString(body),
 			SizeEstimate:    int64(len(subject) + len(body)),

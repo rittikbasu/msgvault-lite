@@ -32,9 +32,7 @@ func runSyncFullLocalForTest(cmd *cobra.Command, args []string) error {
 	return runSyncFullLocal(cmd, args)
 }
 
-// malformed --after flag is rejected before any source is synced,
-// even in a mixed Gmail+IMAP setup where Gmail would otherwise
-// succeed first.
+// malformed --after flag is rejected before any source is synced.
 func TestSyncFullCmd_MalformedDateRejectsBeforeSync(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -45,14 +43,8 @@ func TestSyncFullCmd_MalformedDateRejectsBeforeSync(t *testing.T) {
 	require.NoError(err, "open store")
 	require.NoError(s.InitSchema(), "init schema")
 
-	// Create both Gmail and IMAP sources. The Gmail source is
-	// made fully syncable (OAuth config + token) so that without
-	// the early validation it would be selected and synced before
-	// the IMAP source rejects the malformed date.
 	_, err = s.GetOrCreateSource("gmail", "g@example.com")
 	require.NoError(err, "create gmail source")
-	_, err = s.GetOrCreateSource("imap", "i@example.com")
-	require.NoError(err, "create imap source")
 	_ = s.Close()
 
 	// Write OAuth client secrets and a fake token so the Gmail
@@ -101,76 +93,6 @@ func TestSyncFullCmd_MalformedDateRejectsBeforeSync(t *testing.T) {
 	// No source should have been attempted — the date error
 	// must fire before source discovery, not after Gmail syncs.
 	assert.NotContains(output, "Starting full sync", "no sync should start when date flag is invalid")
-}
-
-// TestSyncFullCmd_MalformedIMAPDateFlagErrors verifies that malformed
-// --after/--before flags produce a clear error for IMAP sources
-// instead of silently syncing the entire mailbox.
-func TestSyncFullCmd_MalformedIMAPDateFlagErrors(t *testing.T) {
-	require := require.New(t)
-	tmpDir := t.TempDir()
-	dbPath := tmpDir + "/msgvault.db"
-
-	s, err := store.Open(dbPath)
-	require.NoError(err, "open store")
-	require.NoError(s.InitSchema(), "init schema")
-
-	src, err := s.GetOrCreateSource("imap", "i@example.com")
-	require.NoError(err, "create imap source")
-	// Store a minimal IMAP config so buildAPIClient reaches
-	// the date-parsing code instead of failing on missing config.
-	require.NoError(s.UpdateSourceSyncConfig(src.ID, `{"host":"localhost","port":993,"username":"i@example.com","tls":true}`), "set sync config")
-	_ = s.Close()
-
-	savedCfg := cfg
-	savedLogger := logger
-	savedAfter := syncAfter
-	savedBefore := syncBefore
-	defer func() {
-		cfg = savedCfg
-		logger = savedLogger
-		syncAfter = savedAfter
-		syncBefore = savedBefore
-	}()
-
-	cfg = &config.Config{
-		HomeDir: tmpDir,
-		Data:    config.DataConfig{DataDir: tmpDir},
-	}
-	logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
-
-	for _, tc := range []struct {
-		name   string
-		after  string
-		before string
-		errStr string
-	}{
-		{"bad after", "not-a-date", "", "--after"},
-		{"bad before", "", "2024/01/01", "--before"},
-		{"bad both", "Jan 1", "tomorrow", "--after"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			syncAfter = tc.after
-			syncBefore = tc.before
-
-			testCmd := &cobra.Command{
-				Use:  "sync-full [email]",
-				Args: cobra.MaximumNArgs(1),
-				RunE: runSyncFullLocalForTest,
-			}
-
-			root := newTestRootCmd()
-			root.AddCommand(testCmd)
-			root.SetArgs([]string{
-				"sync-full", "i@example.com",
-			})
-
-			err := root.Execute()
-			require.Error(err, "expected error for malformed date")
-			require.ErrorContains(err, tc.errStr, "error should mention %q", tc.errStr)
-			assert.ErrorContains(t, err, "YYYY-MM-DD", "error should mention expected format")
-		})
-	}
 }
 
 // TestSyncCmd_GmailOnlyBrokenOAuthSurfacesError verifies that when

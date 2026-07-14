@@ -56,7 +56,6 @@ func seedMessage(t *testing.T, st *Store, sourceID, convID int64, sourceMessageI
 		ConversationID:  convID,
 		SourceID:        sourceID,
 		SourceMessageID: sourceMessageID,
-		MessageType:     "email",
 		Subject:         sql.NullString{String: subject, Valid: true},
 		Snippet:         sql.NullString{String: snippet, Valid: true},
 		SizeEstimate:    100,
@@ -158,8 +157,8 @@ func TestParseSQLiteTime(t *testing.T) {
 }
 
 // TestNullableTimestampScan exercises the scanner used by ListMessages
-// /SearchMessages /GetMessages for the COALESCE(sent_at, received_at,
-// internal_date) expression. SQLite's go-sqlite3 driver can return
+// /SearchMessages /GetMessages for the COALESCE(sent_at, internal_date)
+// expression. SQLite's go-sqlite3 driver can return
 // that computed column as string or []byte (no declared datetime
 // affinity); pgx/v5 always delivers time.Time for TIMESTAMP columns.
 // The scanner must accept all of these without erroring.
@@ -341,8 +340,8 @@ func TestListMessagesCcBcc(t *testing.T) {
 
 // TestListAndSearchSurfacePhoneAndIdentifierParticipants exercises the
 // store-backed list/search path for SMS-style participants that have no
-// email_address: phone-only (synctech-sms phone backups) and identifier-
-// only with a contact name (synctech-sms short codes routed through
+// email_address: malformed/imported MIME can still provide a display name
+// without a usable address, so identifier-
 // EnsureParticipantByIdentifier). Before the participantDisplaySQL fix
 // these rendered with blank From/To because the SELECT only read
 // p.email_address.
@@ -415,8 +414,8 @@ func TestSearchMessagesLikeLiteralWildcards(t *testing.T) {
 
 // TestSearchMessagesLikePaginationStability is the C3 regression for the
 // searchMessagesLike LIKE fallback (api.go), whose ORDER BY gained the
-// ", m.id DESC" tiebreaker. The seeded rows leave sent_at NULL, so
-// COALESCE(sent_at, received_at, internal_date) is NULL for all of them — the
+// ", m.id DESC" tiebreaker. The seeded rows leave sent_at and internal_date
+// NULL, so the sort expression is NULL for all of them — the
 // ambiguous shared-sort-key case. Without the PK tiebreaker, LIMIT/OFFSET paging
 // over them could drop or duplicate an id across adjacent pages. This path is
 // only reachable white-box (unexported method) and is engine-agnostic SQL, so it

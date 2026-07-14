@@ -47,13 +47,9 @@ type Message struct {
 	ConversationID  int64
 	SourceID        int64
 	SourceMessageID string
-	RFC822MessageID sql.NullString // RFC822 Message-ID header for cross-mailbox dedup
-	MessageType     string         // "email"
 	SentAt          sql.NullTime
-	ReceivedAt      sql.NullTime
 	InternalDate    sql.NullTime
 	SenderID        sql.NullInt64
-	IsFromMe        bool
 	Subject         sql.NullString
 	Snippet         sql.NullString
 	SizeEstimate    int64
@@ -91,8 +87,7 @@ func (s *Store) MessageExistsBatch(sourceID int64, sourceMessageIDs []string) (m
 	return result, nil
 }
 
-// SetMessageMetadata writes the messages.metadata JSON column for an
-// already-persisted message. Passing an invalid sql.NullString clears it.
+// MessageExistsWithRawBatch checks which messages have retained raw MIME.
 func (s *Store) MessageExistsWithRawBatch(sourceID int64, sourceMessageIDs []string) (map[string]int64, error) {
 	if len(sourceMessageIDs) == 0 {
 		return make(map[string]int64), nil
@@ -128,8 +123,8 @@ func (s *Store) EnsureConversation(sourceID int64, sourceConversationID, title s
 	now := s.dialect.Now()
 	var id int64
 	err := s.db.QueryRow(fmt.Sprintf(`
-		INSERT INTO conversations (source_id, source_conversation_id, conversation_type, title, created_at, updated_at)
-		VALUES (?, ?, 'email_thread', ?, %s, %s)
+		INSERT INTO conversations (source_id, source_conversation_id, title, created_at, updated_at)
+		VALUES (?, ?, ?, %s, %s)
 		ON CONFLICT (source_id, source_conversation_id) DO UPDATE
 		SET source_conversation_id = conversations.source_conversation_id
 		RETURNING id
@@ -146,19 +141,15 @@ func upsertMessageSQL(id, now string) string {
 	INSERT INTO messages (
 		id,
 		conversation_id, source_id, source_message_id,
-		rfc822_message_id, message_type,
-		sent_at, received_at, internal_date, sender_id, is_from_me,
+		sent_at, internal_date, sender_id,
 		subject, snippet, size_estimate,
 		has_attachments, attachment_count, archived_at
-	) VALUES (%s, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+	) VALUES (%s, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
 	ON CONFLICT(source_id, source_message_id) DO UPDATE SET
 		conversation_id = excluded.conversation_id,
-		rfc822_message_id = excluded.rfc822_message_id,
 		sent_at = excluded.sent_at,
-		received_at = excluded.received_at,
 		internal_date = excluded.internal_date,
 		sender_id = excluded.sender_id,
-		is_from_me = excluded.is_from_me,
 		subject = excluded.subject,
 		snippet = excluded.snippet,
 		size_estimate = excluded.size_estimate,
@@ -166,10 +157,9 @@ func upsertMessageSQL(id, now string) string {
 		attachment_count = excluded.attachment_count`, id, now)
 }
 
-// nextMessageIDSQL lifts upgraded SQLite archives out of any legacy ROWID
-// range whose deleted high-water mark is unknowable. Unix milliseconds remain
-// exactly representable by JavaScript numbers while dwarfing plausible message
-// counts; MAX(id)+1 preserves monotonicity once the archive reaches that floor.
+// nextMessageIDSQL allocates a monotonic permanent archive ID. Unix milliseconds
+// remain exactly representable by JavaScript numbers while MAX(id)+1 preserves
+// ordering when several messages are persisted in the same second.
 func nextMessageIDSQL() string {
 	return `(SELECT MAX(
 		COALESCE(MAX(id) + 1, 1),
@@ -186,8 +176,7 @@ func upsertMessageWith(q querier, d Dialect, msg *Message) (int64, error) {
 	sql := upsertMessageSQL(nextMessageIDSQL(), d.Now())
 	args := []any{
 		msg.ConversationID, msg.SourceID, msg.SourceMessageID,
-		msg.RFC822MessageID, msg.MessageType,
-		msg.SentAt, msg.ReceivedAt, msg.InternalDate, msg.SenderID, msg.IsFromMe,
+		msg.SentAt, msg.InternalDate, msg.SenderID,
 		msg.Subject, msg.Snippet, msg.SizeEstimate,
 		msg.HasAttachments, msg.AttachmentCount,
 	}
@@ -1106,10 +1095,6 @@ func (s *Store) backfillFTSBatch(fromID, toID int64) (int64, error) {
 	return affected, err
 }
 
-// RecomputeConversationStats updates the denormalized stats columns on all conversations
-// belonging to the given source. It recomputes message_count, participant_count,
-// last_message_at, and last_message_preview from the current table state.
-// Safe to call multiple times — always produces the same result (idempotent).
 func (s *Store) AttachmentPathsUniqueToSource(sourceID int64) ([]string, error) {
 	rows, err := s.db.Query(`
 		SELECT DISTINCT a.storage_path

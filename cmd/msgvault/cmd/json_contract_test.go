@@ -109,7 +109,6 @@ func TestSearchJSONContractReportsHasMore(t *testing.T) {
 		ConversationID:  conversationID,
 		SourceID:        source.ID,
 		SourceMessageID: "gmail-needle-2",
-		MessageType:     "email",
 		SentAt:          sql.NullTime{Time: time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC), Valid: true},
 		Subject:         sql.NullString{String: "Needle subject 2", Valid: true},
 	})

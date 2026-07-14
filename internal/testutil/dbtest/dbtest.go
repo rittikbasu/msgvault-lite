@@ -69,16 +69,16 @@ func (tdb *TestDB) SeedStandardDataSet() {
 			(3, 'carol@example.com', 'Carol White', 'example.com');
 
 		-- Conversation
-		INSERT INTO conversations (id, source_id, source_conversation_id, conversation_type, title) VALUES
-			(1, 1, 'thread1', 'email_thread', 'Test Thread');
+		INSERT INTO conversations (id, source_id, source_conversation_id, title) VALUES
+			(1, 1, 'thread1', 'Test Thread');
 
 		-- Messages (3 from Alice, 2 from Bob)
-		INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, snippet, size_estimate, has_attachments, attachment_count) VALUES
-			(1, 1, 1, 'msg1', 'email', '2024-01-15 10:00:00', 'Hello World', 'Preview 1', 1000, 0, 0),
-			(2, 1, 1, 'msg2', 'email', '2024-01-16 11:00:00', 'Re: Hello', 'Preview 2', 2000, 1, 2),
-			(3, 1, 1, 'msg3', 'email', '2024-02-01 09:00:00', 'Follow up', 'Preview 3', 1500, 0, 0),
-			(4, 1, 1, 'msg4', 'email', '2024-02-15 14:00:00', 'Question', 'Preview 4', 3000, 1, 1),
-			(5, 1, 1, 'msg5', 'email', '2024-03-01 16:00:00', 'Final', 'Preview 5', 500, 0, 0);
+		INSERT INTO messages (id, conversation_id, source_id, source_message_id, sent_at, subject, snippet, size_estimate, has_attachments, attachment_count) VALUES
+			(1, 1, 1, 'msg1', '2024-01-15 10:00:00', 'Hello World', 'Preview 1', 1000, 0, 0),
+			(2, 1, 1, 'msg2', '2024-01-16 11:00:00', 'Re: Hello', 'Preview 2', 2000, 1, 2),
+			(3, 1, 1, 'msg3', '2024-02-01 09:00:00', 'Follow up', 'Preview 3', 1500, 0, 0),
+			(4, 1, 1, 'msg4', '2024-02-15 14:00:00', 'Question', 'Preview 4', 3000, 1, 1),
+			(5, 1, 1, 'msg5', '2024-03-01 16:00:00', 'Final', 'Preview 5', 500, 0, 0);
 
 		-- Message bodies
 		INSERT INTO message_bodies (message_id, body_text) VALUES
@@ -190,7 +190,7 @@ func (tdb *TestDB) AddConversation(opts ConversationOpts) int64 {
 	tdb.nextConversationSeq++
 	sourceConvID := fmt.Sprintf("thread_%d_%d", opts.SourceID, tdb.nextConversationSeq)
 	res, err := tdb.DB.Exec(
-		`INSERT INTO conversations (source_id, source_conversation_id, conversation_type, title) VALUES (?, ?, 'email_thread', ?)`,
+		`INSERT INTO conversations (source_id, source_conversation_id, title) VALUES (?, ?, ?)`,
 		opts.SourceID, sourceConvID, opts.Title,
 	)
 	require.NoError(tdb.T, err, "AddConversation")
@@ -242,7 +242,6 @@ func (tdb *TestDB) AddMessageLabel(messageID, labelID int64) {
 type ParticipantOpts struct {
 	Email       *string // nil = NULL; use new("x") for a value
 	DisplayName *string // nil = NULL
-	Phone       *string // nil = NULL; E.164 format when set
 	Domain      string
 }
 
@@ -262,14 +261,9 @@ func (tdb *TestDB) AddParticipant(opts ParticipantOpts) int64 {
 		email = *opts.Email
 	}
 
-	var phone any
-	if opts.Phone != nil {
-		phone = *opts.Phone
-	}
-
 	_, err := tdb.DB.Exec(
-		`INSERT INTO participants (id, email_address, display_name, phone_number, domain) VALUES (?, ?, ?, ?, ?)`,
-		id, email, displayName, phone, opts.Domain,
+		`INSERT INTO participants (id, email_address, display_name, domain) VALUES (?, ?, ?, ?)`,
+		id, email, displayName, opts.Domain,
 	)
 	require.NoError(tdb.T, err, "AddParticipant")
 	return id
@@ -292,7 +286,6 @@ type MessageOpts struct {
 	BccIDs         []int64 // participant IDs for 'bcc' recipients
 	SourceID       int64   // defaults to 1 if 0
 	ConversationID int64   // defaults to 1 if 0
-	MessageType    string  // defaults to "email" if empty
 }
 
 // AddMessage inserts a message with its from/to/cc recipients and returns the message ID.
@@ -335,14 +328,9 @@ func (tdb *TestDB) AddMessage(opts MessageOpts) int64 {
 			"AddMessage: SourceID %d does not match conversation %d source_id %d", srcID, convID, convSourceID)
 	}
 
-	messageType := opts.MessageType
-	if messageType == "" {
-		messageType = "email"
-	}
-
 	_, err := tdb.DB.Exec(
-		`INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, snippet, size_estimate, has_attachments) VALUES (?, ?, ?, ?, ?, ?, ?, 'test', ?, ?)`,
-		id, convID, srcID, sourceMessageID, messageType, sentAt, opts.Subject, size, opts.HasAttachments,
+		`INSERT INTO messages (id, conversation_id, source_id, source_message_id, sent_at, subject, snippet, size_estimate, has_attachments) VALUES (?, ?, ?, ?, ?, ?, 'test', ?, ?)`,
+		id, convID, srcID, sourceMessageID, sentAt, opts.Subject, size, opts.HasAttachments,
 	)
 	require.NoError(tdb.T, err, "AddMessage")
 

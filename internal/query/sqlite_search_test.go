@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/testutil/dbtest"
 	"go.kenn.io/msgvault/internal/testutil/ptr"
 )
 
@@ -133,41 +132,6 @@ func TestSearch_WithFTS(t *testing.T) {
 
 	require.NotEmpty(t, results)
 	assert.Equal(t, "Hello World", results[0].Subject)
-}
-
-func TestSearch_MessageTypeFilter(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	env := newTestEnv(t)
-	aliceID := env.MustLookupParticipant("alice@example.com")
-	bobID := env.MustLookupParticipant("bob@company.org")
-	smsID := env.AddMessage(dbtest.MessageOpts{
-		Subject: "lunch plan",
-		SentAt:  "2024-04-10 10:00:00",
-		FromID:  aliceID,
-		ToIDs:   []int64{bobID},
-	})
-	emailID := env.AddMessage(dbtest.MessageOpts{
-		Subject: "lunch receipt",
-		SentAt:  "2024-04-11 10:00:00",
-		FromID:  aliceID,
-		ToIDs:   []int64{bobID},
-	})
-	_, err := env.DB.Exec(`UPDATE messages SET message_type = 'sms' WHERE id = ?`, smsID)
-	require.NoError(err, "set sms message_type")
-	_, err = env.DB.Exec(`UPDATE messages SET message_type = 'email' WHERE id = ?`, emailID)
-	require.NoError(err, "set email message_type")
-
-	results := env.MustSearch(search.Parse("message_type:sms"), 100, 0)
-	require.Len(results, 1, "filter-only message_type search")
-	assert.Equal(smsID, results[0].ID)
-	assert.Equal("sms", results[0].MessageType)
-
-	env.EnableFTS()
-	results = env.MustSearch(search.Parse("message_type:sms lunch"), 100, 0)
-	require.Len(results, 1, "message_type must scope FTS search")
-	assert.Equal(smsID, results[0].ID)
-	assert.Equal("sms", results[0].MessageType)
 }
 
 // TestSearch_WithFTS_SpecialChars verifies that FTS5 special characters in

@@ -15,19 +15,19 @@ func TestStore_GetSourcesByIdentifier(t *testing.T) {
 	assert := assert.New(t)
 	st := testutil.NewTestStore(t)
 
-	// Create two sources with same identifier, different types
-	_, err := st.GetOrCreateSource("gmail", "user@example.com")
+	src, err := st.GetOrCreateSource("gmail", "user@example.com")
 	require.NoError(err, "create gmail source")
-	_, err = st.GetOrCreateSource("mbox", "user@example.com")
-	require.NoError(err, "create mbox source")
 
 	sources, err := st.GetSourcesByIdentifier("user@example.com")
 	require.NoError(err, "GetSourcesByIdentifier")
-	require.Len(sources, 2)
+	require.Len(sources, 1)
 
-	// Verify ordering by source_type
+	assert.Equal(src.ID, sources[0].ID, "sources[0].ID")
 	assert.Equal("gmail", sources[0].SourceType, "sources[0].SourceType")
-	assert.Equal("mbox", sources[1].SourceType, "sources[1].SourceType")
+
+	_, err = st.GetOrCreateSource("mbox", "user@example.com")
+	require.Error(err)
+	assert.ErrorContains(err, "only gmail is allowed")
 }
 
 func TestStore_GetSourcesByIdentifier_NotFound(t *testing.T) {
@@ -51,7 +51,6 @@ func TestStore_AttachmentPathsUniqueToSource(t *testing.T) {
 		ConversationID:  otherConv,
 		SourceID:        otherSrc.ID,
 		SourceMessageID: "other-msg-1",
-		MessageType:     "email",
 	})
 	require.NoError(err, "create other message")
 

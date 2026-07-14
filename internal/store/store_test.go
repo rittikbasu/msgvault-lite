@@ -149,10 +149,8 @@ func TestStore_UpsertMessage(t *testing.T) {
 					WithSnippet("Preview snippet").
 					WithSize(2048).
 					WithSentAt(now).
-					WithReceivedAt(now.Add(time.Second)).
 					WithInternalDate(now).
 					WithAttachmentCount(2).
-					WithIsFromMe(true).
 					Build()
 			},
 		},
@@ -1567,7 +1565,6 @@ func createMessagesForSource(t *testing.T, st *store.Store, srcID, convID int64,
 			ConversationID:  convID,
 			SourceID:        srcID,
 			SourceMessageID: fmt.Sprintf("%s-msg-%d", prefix, i),
-			MessageType:     "email",
 			SizeEstimate:    1000,
 		})
 		require.NoError(t, err, "UpsertMessage %s-%d", prefix, i)

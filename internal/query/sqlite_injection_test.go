@@ -109,37 +109,3 @@ func TestSQLInjection_FilterStringsAreSafelyParameterized(t *testing.T) {
 	require.NoError(t, err, "failed to count messages after injection tests")
 	assert.Equal(t, 5, count, "expected 5 messages in database after injection tests (standard seed data)")
 }
-
-func TestListMessagesFiltersByMessageType(t *testing.T) {
-	require := require.New(t)
-	env := newTestEnv(t)
-	_, err := env.DB.Exec(`
-		INSERT INTO participants (id, phone_number, display_name) VALUES (99, '+15551234567', 'SMS Sender');
-		INSERT INTO participants (id, phone_number, display_name) VALUES (100, '+15557654321', 'Me');
-		INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, snippet, size_estimate, has_attachments, attachment_count)
-		VALUES (99, 1, 1, 'sms-99', 'sms', '2024-04-01 08:00:00', '', 'known sms snippet', 17, 0, 0);
-		INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES (99, 99, 'from');
-		INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES (99, 100, 'to');
-	`)
-	require.NoError(err, "insert sms fixture")
-
-	messages := env.MustListMessages(MessageFilter{
-		MessageType: "sms",
-		Sorting:     MessageSorting{Field: MessageSortByDate, Direction: SortDesc},
-	})
-
-	require.Len(messages, 1)
-	require.Equal(int64(99), messages[0].ID)
-	require.Equal("sms", messages[0].MessageType)
-	require.Equal("+15551234567", messages[0].FromPhone, "summary sender phone")
-	require.Equal("SMS Sender", messages[0].FromName, "summary sender name")
-	require.Len(messages[0].To, 1, "summary To")
-	require.Equal("+15557654321", messages[0].To[0].Email)
-	require.Equal("Me", messages[0].To[0].Name)
-
-	detail, err := env.Engine.GetMessage(env.Ctx, 99)
-	require.NoError(err, "GetMessage phone-only SMS")
-	require.Equal("sms", detail.MessageType)
-	require.Len(detail.From, 1, "detail From")
-	require.Equal("+15551234567", detail.From[0].Email, "detail From phone fallback")
-}

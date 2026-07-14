@@ -186,7 +186,6 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 
 	// Set up sync options
 	opts := sync.DefaultOptions()
-	opts.SourceType = src.SourceType
 	opts.Query = query
 	opts.NoResume = syncNoResume
 	opts.Limit = syncLimit

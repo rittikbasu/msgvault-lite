@@ -13,8 +13,8 @@ import (
 	"go.kenn.io/kit/backup"
 )
 
-// contentBearing and thumbBearing select attachment rows whose bytes live
-// in the local attachments tree. Only genuine URL schemes are excluded — a
+// contentBearing selects attachment rows whose bytes live in the local
+// attachments tree. Only genuine URL schemes are excluded — a
 // local namespaced path is free to start with "http" (an importer may use
 // an "http-cache/" namespace), so the patterns must match the "://"
 // separator, not the bare prefix.
@@ -23,21 +23,10 @@ const contentBearing = `content_hash IS NOT NULL AND content_hash != ''
 	AND storage_path NOT LIKE 'http://%'
 	AND storage_path NOT LIKE 'https://%'`
 
-const thumbBearing = `thumbnail_hash IS NOT NULL AND thumbnail_hash != ''
-	AND thumbnail_path IS NOT NULL AND thumbnail_path != ''
-	AND thumbnail_path NOT LIKE 'http://%'
-	AND thumbnail_path NOT LIKE 'https://%'`
-
 // attachmentBlobsQuery counts the distinct content-bearing hashes reachable
-// from the archive with thumbnails included: exactly the population
-// ContentInfo enumerates and CaptureAttachments stores. UNION deduplicates
-// a thumbnail hash that also appears as a content hash, so this count always
-// equals len(ContentInfo.Refs) and the manifest's attachments.blobs.
-const attachmentBlobsQuery = `SELECT COUNT(*) FROM (
-	SELECT content_hash AS h FROM attachments WHERE ` + contentBearing + `
-	UNION
-	SELECT thumbnail_hash AS h FROM attachments WHERE ` + thumbBearing + `
-)`
+// from the archive: exactly the population ContentInfo enumerates and
+// CaptureAttachments stores.
+const attachmentBlobsQuery = `SELECT COUNT(DISTINCT content_hash) FROM attachments WHERE ` + contentBearing
 
 // Stats is msgvault's manifest stats payload (moved from backup.ManifestStats;
 // identical field order and json tags).
@@ -124,9 +113,8 @@ func (a *App) Version() string { return a.version }
 type frozenView struct{ tx *sql.Tx }
 
 // ContentInfo returns the frozen content-bearing locator set in first-seen
-// order, with thumbnails appended. size is nullable, so a hash whose rows
-// all lack size metadata yields the same -1 sentinel thumbnails use; capture
-// resolves the real size from the file either way. Each ref carries one
+// order. size is nullable, so a hash whose rows all lack size metadata yields
+// -1; capture resolves the real size from the file either way. Each ref carries one
 // recorded storage path (MIN across the hash's rows — any copy works,
 // capture re-derives the hash from the bytes), because importers may
 // namespace paths rather than use the plain "<aa>/<hash>" layout.
@@ -139,39 +127,15 @@ func (v *frozenView) ContentInfo(ctx context.Context) (*backup.ContentInfo, erro
 	}
 	defer func() { _ = rows.Close() }()
 	var refs []backup.ContentRef
-	seen := map[string]bool{}
 	for rows.Next() {
 		var ref backup.ContentRef
 		if err := rows.Scan(&ref.Hash, &ref.Size, &ref.StoragePath); err != nil {
 			return nil, fmt.Errorf("backupapp: scanning attachment locator: %w", err)
 		}
 		refs = append(refs, ref)
-		seen[ref.Hash] = true
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("backupapp: attachment locator rows: %w", err)
-	}
-
-	thumbRows, err := v.tx.QueryContext(ctx,
-		"SELECT thumbnail_hash, MIN(thumbnail_path) FROM attachments WHERE "+thumbBearing+
-			" GROUP BY thumbnail_hash ORDER BY MIN(id)")
-	if err != nil {
-		return nil, fmt.Errorf("backupapp: thumbnail locator query: %w", err)
-	}
-	defer func() { _ = thumbRows.Close() }()
-	for thumbRows.Next() {
-		var ref backup.ContentRef
-		if err := thumbRows.Scan(&ref.Hash, &ref.StoragePath); err != nil {
-			return nil, fmt.Errorf("backupapp: scanning thumbnail locator: %w", err)
-		}
-		if !seen[ref.Hash] {
-			ref.Size = -1
-			refs = append(refs, ref)
-			seen[ref.Hash] = true
-		}
-	}
-	if err := thumbRows.Err(); err != nil {
-		return nil, fmt.Errorf("backupapp: thumbnail locator rows: %w", err)
 	}
 
 	var rowCount int64
@@ -199,9 +163,6 @@ func (v *frozenView) hasNonCanonicalAttachmentPaths(ctx context.Context) (bool, 
 	err := v.tx.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM attachments WHERE `+contentBearing+`
 		  AND storage_path != substr(content_hash, 1, 2) || '/' || content_hash
-		UNION ALL
-		SELECT 1 FROM attachments WHERE `+thumbBearing+`
-		  AND thumbnail_path != substr(thumbnail_hash, 1, 2) || '/' || thumbnail_hash
 	)`).Scan(&found)
 	if err != nil {
 		return false, fmt.Errorf("backupapp: attachment path canonicality query: %w", err)
@@ -227,14 +188,12 @@ func (a *App) RestoredStats(ctx context.Context, db *sql.DB) (json.RawMessage, e
 	return json.Marshal(st)
 }
 
-// RestoredContentPaths maps each content and thumbnail hash in the restored
+// RestoredContentPaths maps each content hash in the restored
 // database to every relative storage path it is recorded at. Paths come from
 // DB rows, so each is validated as local before restore writes it.
 func (a *App) RestoredContentPaths(ctx context.Context, db *sql.DB) (map[string][]string, error) {
-	// UNION deduplicates repeated (hash, path) rows across attachments.
 	rows, err := db.QueryContext(ctx,
-		"SELECT content_hash, storage_path FROM attachments WHERE "+contentBearing+
-			" UNION SELECT thumbnail_hash, thumbnail_path FROM attachments WHERE "+thumbBearing)
+		"SELECT DISTINCT content_hash, storage_path FROM attachments WHERE "+contentBearing)
 	if err != nil {
 		return nil, fmt.Errorf("backupapp: attachment path query: %w", err)
 	}

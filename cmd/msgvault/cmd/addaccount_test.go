@@ -42,13 +42,6 @@ func TestFindGmailSource(t *testing.T) {
 	require.ErrorIs(err, errGmailSourceNotFound, "findGmailSource")
 	assert.Nil(src, "expected nil with no sources")
 
-	// Non-Gmail source exists — should still suggest add-account.
-	_, err = s.GetOrCreateSource("mbox", email)
-	require.NoError(err, "create mbox source")
-	src, err = findGmailSource(s, email)
-	require.ErrorIs(err, errGmailSourceNotFound, "findGmailSource")
-	assert.Nil(src, "expected nil with only mbox source")
-
 	// Gmail source exists — should suppress the hint.
 	_, err = s.GetOrCreateSource("gmail", email)
 	require.NoError(err, "create gmail source")

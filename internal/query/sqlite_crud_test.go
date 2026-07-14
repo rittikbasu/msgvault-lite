@@ -1181,21 +1181,6 @@ func TestGetTotalStatsWithSearchQuery(t *testing.T) {
 	assert.Equal(int64(10000+5000), stats.AttachmentSize, "SearchQuery=Hello attachment size")
 }
 
-func TestGetTotalStatsWithSearchQuery_MessageTypeFilter(t *testing.T) {
-	assert := assert.New(t)
-	env := newTestEnv(t)
-
-	_, err := env.DB.Exec(`UPDATE messages SET message_type = ? WHERE id = ?`, "sms", int64(2))
-	require.NoError(t, err, "mark message as sms")
-
-	stats := env.MustGetTotalStats(StatsOptions{SearchQuery: "message_type:sms Hello"})
-
-	assert.Equal(int64(1), stats.MessageCount, "SearchQuery=message_type:sms messages")
-	assert.Equal(int64(2000), stats.TotalSize, "SearchQuery=message_type:sms total size")
-	assert.Equal(int64(2), stats.AttachmentCount, "SearchQuery=message_type:sms attachments")
-	assert.Equal(int64(10000+5000), stats.AttachmentSize, "SearchQuery=message_type:sms attachment size")
-}
-
 // TestGetTotalStatsWithSearchQuery_FromFilter verifies that from: search
 // filters are applied correctly to stats.
 func TestGetTotalStatsWithSearchQuery_FromFilter(t *testing.T) {
@@ -1221,31 +1206,6 @@ func TestGetTotalStatsWithSearchQuery_Combined(t *testing.T) {
 
 	assert.Equal(t, int64(1), stats.MessageCount, "SearchQuery+WithAttachments messages")
 	assert.Equal(t, int64(2000), stats.TotalSize, "SearchQuery+WithAttachments total size")
-}
-
-func TestSearchFastWithStats_MessageTypeStats(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	env := newTestEnv(t)
-
-	smsID := env.AddMessage(dbtest.MessageOpts{
-		Subject:      "Lunch via SMS",
-		SentAt:       "2024-04-01 10:00:00",
-		SizeEstimate: 321,
-	})
-	_, err := env.DB.Exec(`UPDATE messages SET message_type = 'sms' WHERE id = ?`, smsID)
-	require.NoError(err, "set sms message_type")
-
-	q := search.Parse("message_type:sms")
-	result, err := env.Engine.SearchFastWithStats(env.Ctx, q, "message_type:sms", MessageFilter{}, ViewSenders, 100, 0)
-	require.NoError(err, "SearchFastWithStats")
-	require.NotNil(result.Stats, "stats")
-
-	require.Len(result.Messages, 1, "messages")
-	assert.Equal(smsID, result.Messages[0].ID, "message id")
-	assert.Equal(int64(1), result.TotalCount, "total count")
-	assert.Equal(int64(1), result.Stats.MessageCount, "stats message count")
-	assert.Equal(int64(321), result.Stats.TotalSize, "stats total size")
 }
 
 func TestGetMessageRaw(t *testing.T) {
@@ -1346,7 +1306,7 @@ func TestGetGmailIDsByMessageIDs_ExcludesSourceDeleted(t *testing.T) {
 
 	env := newTestEnv(t)
 
-	_, err := env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, deleted_from_source_at) VALUES (902, 1, 1, 'gone-1', 'email', '2024-01-02', '2024-06-01')`)
+	_, err := env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, sent_at, deleted_from_source_at) VALUES (902, 1, 1, 'gone-1', '2024-01-02', '2024-06-01')`)
 	require.NoError(err, "insert source-deleted message")
 
 	ids, err := env.Engine.GetGmailIDsByMessageIDs(env.Ctx, []int64{1, 902})
@@ -1409,26 +1369,21 @@ func TestGetAccountsByGmailIDs_MultipleAndNonQualifying(t *testing.T) {
 	// Second Gmail source with a live message.
 	_, err := env.DB.Exec(`INSERT INTO sources (id, source_type, identifier) VALUES (98, 'gmail', 'second@gmail.com')`)
 	require.NoError(err, "insert second gmail source")
-	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at) VALUES (911, 1, 98, 'other-1', 'email', '2024-01-05')`)
+	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, sent_at) VALUES (911, 1, 98, 'other-1', '2024-01-05')`)
 	require.NoError(err, "insert second-account message")
 
-	// Non-Gmail source and a source-deleted Gmail message must not
-	// contribute accounts.
-	_, err = env.DB.Exec(`INSERT INTO sources (id, source_type, identifier) VALUES (99, 'whatsapp', 'wa@example.com')`)
-	require.NoError(err, "insert whatsapp source")
-	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at) VALUES (912, 1, 99, 'wa-1', 'whatsapp', '2024-01-06')`)
-	require.NoError(err, "insert whatsapp message")
-	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, deleted_from_source_at) VALUES (913, 1, 98, 'gone-1', 'email', '2024-01-07', '2024-06-01')`)
+	// Source-deleted Gmail messages must not contribute accounts.
+	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, sent_at, deleted_from_source_at) VALUES (913, 1, 98, 'gone-1', '2024-01-07', '2024-06-01')`)
 	require.NoError(err, "insert source-deleted message")
 
-	accounts, err := env.Engine.GetAccountsByGmailIDs(env.Ctx, []string{"msg1", "other-1", "wa-1"})
+	accounts, err := env.Engine.GetAccountsByGmailIDs(env.Ctx, []string{"msg1", "other-1"})
 	require.NoError(err, "resolve mixed accounts")
 	assert.Equal([]string{"second@gmail.com", "test@gmail.com"}, accounts,
-		"both gmail accounts, sorted; whatsapp excluded")
+		"both gmail accounts, sorted")
 
-	accounts, err = env.Engine.GetAccountsByGmailIDs(env.Ctx, []string{"gone-1", "wa-1"})
+	accounts, err = env.Engine.GetAccountsByGmailIDs(env.Ctx, []string{"gone-1"})
 	require.NoError(err, "resolve non-qualifying")
-	assert.Empty(accounts, "deleted and non-Gmail messages contribute no account")
+	assert.Empty(accounts, "deleted messages contribute no account")
 }
 
 func TestGetAccountsByGmailIDs_LargeSelectionExceedsSingleQueryLimit(t *testing.T) {
@@ -1439,7 +1394,7 @@ func TestGetAccountsByGmailIDs_LargeSelectionExceedsSingleQueryLimit(t *testing.
 
 	_, err := env.DB.Exec(`INSERT INTO sources (id, source_type, identifier) VALUES (98, 'gmail', 'second@gmail.com')`)
 	require.NoError(err, "insert second gmail source")
-	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at) VALUES (911, 1, 98, 'other-1', 'email', '2024-01-05')`)
+	_, err = env.DB.Exec(`INSERT INTO messages (id, conversation_id, source_id, source_message_id, sent_at) VALUES (911, 1, 98, 'other-1', '2024-01-05')`)
 	require.NoError(err, "insert second-account message")
 
 	// 33k IDs exceed SQLITE_MAX_VARIABLE_NUMBER (32766) as a single IN

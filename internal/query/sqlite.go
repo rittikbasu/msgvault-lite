@@ -230,8 +230,7 @@ func optsToFilterConditions(d Dialect, opts AggregateOptions, prefix string) ([]
 	var conditions []string
 	var args []any
 
-	// Always exclude rows soft-deleted by deduplicate; gate
-	// source-deleted on opts.HideDeletedFromSource via the helper.
+	// Gate source-deleted rows on opts.HideDeletedFromSource.
 	conditions = append(conditions, store.LiveMessagesWhere(strings.TrimSuffix(prefix, "."), opts.HideDeletedFromSource))
 
 	conditions, args = appendSourceFilter(
@@ -306,8 +305,7 @@ func (e *SQLiteEngine) buildFilterJoinsAndConditions(filter MessageFilter, table
 
 	// Include all messages (deleted messages shown with indicator in TUI)
 
-	// Always exclude rows soft-deleted by deduplicate; gate
-	// source-deleted on filter.HideDeletedFromSource via the helper.
+	// Gate source-deleted rows on filter.HideDeletedFromSource.
 	conditions = append(conditions, store.LiveMessagesWhere(strings.TrimSuffix(prefix, "."), filter.HideDeletedFromSource))
 
 	conditions, args = appendSourceFilter(
@@ -333,17 +331,8 @@ func (e *SQLiteEngine) buildFilterJoinsAndConditions(filter MessageFilter, table
 		conditions = append(conditions, e.dialect.BoolTrueExpr(prefix+"has_attachments"))
 	}
 
-	if filter.MessageType != "" {
-		condition, conditionArgs := sqliteMessageTypeCondition(tableAlias, []string{filter.MessageType})
-		if condition != "" {
-			conditions = append(conditions, condition)
-			args = append(args, conditionArgs...)
-		}
-	}
-
 	// Sender + sender-name filters — check both message_recipients (email)
-	// and direct sender_id (WhatsApp/chat). Also checks phone_number for
-	// phone-based lookups (e.g., from:+447...). Uses EXISTS (not a plain
+	// and direct sender_id. Uses EXISTS (not a plain
 	// JOIN) so a message with multiple 'from' rows is not multiplied into
 	// duplicate result rows.
 	//
@@ -358,15 +347,15 @@ func (e *SQLiteEngine) buildFilterJoinsAndConditions(filter MessageFilter, table
 			JOIN participants p_filter_from ON p_filter_from.id = mr_filter_from.participant_id
 			WHERE mr_filter_from.message_id = m.id
 			  AND mr_filter_from.recipient_type = 'from'
-			  AND (p_filter_from.email_address = ? OR p_filter_from.phone_number = ?)
+			  AND p_filter_from.email_address = ?
 			  AND %s = ?
 		) OR EXISTS (
 			SELECT 1 FROM participants p_direct_sender
 			WHERE p_direct_sender.id = m.sender_id
-			  AND (p_direct_sender.email_address = ? OR p_direct_sender.phone_number = ?)
+			  AND p_direct_sender.email_address = ?
 			  AND %s = ?
 		))`, recipientNameExpr("mr_filter_from", "p_filter_from"), participantNameExpr("p_direct_sender")))
-		args = append(args, filter.Sender, filter.Sender, filter.SenderName, filter.Sender, filter.Sender, filter.SenderName)
+		args = append(args, filter.Sender, filter.SenderName, filter.Sender, filter.SenderName)
 	} else {
 		if filter.Sender != "" {
 			conditions = append(conditions, `(EXISTS (
@@ -374,30 +363,27 @@ func (e *SQLiteEngine) buildFilterJoinsAndConditions(filter MessageFilter, table
 			JOIN participants p_filter_from ON p_filter_from.id = mr_filter_from.participant_id
 			WHERE mr_filter_from.message_id = m.id
 			  AND mr_filter_from.recipient_type = 'from'
-			  AND (p_filter_from.email_address = ? OR p_filter_from.phone_number = ?)
+			  AND p_filter_from.email_address = ?
 		) OR EXISTS (
 			SELECT 1 FROM participants p_direct_sender
 			WHERE p_direct_sender.id = m.sender_id
-			  AND (p_direct_sender.email_address = ? OR p_direct_sender.phone_number = ?)
+			  AND p_direct_sender.email_address = ?
 		))`)
-			args = append(args, filter.Sender, filter.Sender, filter.Sender, filter.Sender)
+			args = append(args, filter.Sender, filter.Sender)
 		} else if filter.MatchesEmpty(ViewSenders) {
 			// A message has an "empty sender" only if it has no from-recipient with a
-			// non-empty email/phone AND no direct sender_id. NOT EXISTS keeps the
+			// non-empty email AND no direct sender_id. NOT EXISTS keeps the
 			// predicate message-scoped (no per-from-row multiplication).
 			conditions = append(conditions, `(NOT EXISTS (
 			SELECT 1 FROM message_recipients mr_filter_from
 			JOIN participants p_filter_from ON p_filter_from.id = mr_filter_from.participant_id
 			WHERE mr_filter_from.message_id = m.id
 			  AND mr_filter_from.recipient_type = 'from'
-			  AND (
-			    (p_filter_from.email_address IS NOT NULL AND p_filter_from.email_address != '') OR
-			    (p_filter_from.phone_number IS NOT NULL AND p_filter_from.phone_number != '')
-			  )
+			  AND p_filter_from.email_address IS NOT NULL AND p_filter_from.email_address != ''
 		) AND m.sender_id IS NULL)`)
 		}
 
-		// Sender name filter — check both message_recipients (email) and direct sender_id (WhatsApp/chat).
+		// Sender name filter — check both the From recipient and direct sender_id.
 		// Uses EXISTS so a message with multiple 'from' rows sharing the queried
 		// display name is not multiplied into duplicate result rows.
 		if filter.SenderName != "" {
@@ -576,10 +562,6 @@ func (e *SQLiteEngine) SubAggregate(ctx context.Context, filter MessageFilter, g
 	optsConds, optsArgs := optsToFilterConditions(e.dialect, opts, "m.")
 	filterConditions = append(filterConditions, optsConds...)
 	args = append(args, optsArgs...)
-	if !aggregateHasExplicitMessageType(filter, opts) {
-		filterConditions = append(filterConditions, emailOnlyFilterM)
-	}
-
 	searchJoins, searchConds, searchArgs :=
 		e.buildAggregateSearchParts(ctx, opts.SearchQuery, groupBy)
 	filterConditions = append(filterConditions, searchConds...)
@@ -594,9 +576,6 @@ func (e *SQLiteEngine) SubAggregate(ctx context.Context, filter MessageFilter, g
 // Aggregate performs grouping based on the provided ViewType.
 func (e *SQLiteEngine) Aggregate(ctx context.Context, groupBy ViewType, opts AggregateOptions) ([]AggregateRow, error) {
 	conditions, args := optsToFilterConditions(e.dialect, opts, "m.")
-	if !aggregateHasExplicitMessageType(MessageFilter{}, opts) {
-		conditions = append(conditions, emailOnlyFilterM)
-	}
 
 	searchJoins, searchConds, searchArgs :=
 		e.buildAggregateSearchParts(ctx, opts.SearchQuery, groupBy)
@@ -606,58 +585,6 @@ func (e *SQLiteEngine) Aggregate(ctx context.Context, groupBy ViewType, opts Agg
 	return e.executeAggregate(
 		ctx, groupBy, opts, searchJoins, conditions, args,
 	)
-}
-
-func aggregateHasExplicitMessageType(filter MessageFilter, opts AggregateOptions) bool {
-	if filter.MessageType != "" {
-		return true
-	}
-	if opts.SearchQuery == "" {
-		return false
-	}
-	return len(search.Parse(opts.SearchQuery).MessageTypes) > 0
-}
-
-func sqliteMessageTypeCondition(alias string, messageTypes []string) (string, []any) {
-	var conditions []string
-	var args []any
-	var exact []string
-	includeEmail := false
-
-	for _, typ := range messageTypes {
-		typ = strings.TrimSpace(strings.ToLower(typ))
-		if typ == "" {
-			continue
-		}
-		if typ == messageTypeEmail {
-			includeEmail = true
-			continue
-		}
-		exact = append(exact, typ)
-	}
-
-	col := "message_type"
-	if alias != "" {
-		col = alias + ".message_type"
-	}
-	if includeEmail {
-		conditions = append(conditions,
-			fmt.Sprintf("(%s = ? OR %s IS NULL OR %s = '')", col, col, col))
-		args = append(args, messageTypeEmail)
-	}
-	if len(exact) > 0 {
-		placeholders := make([]string, len(exact))
-		for i, typ := range exact {
-			placeholders[i] = "?"
-			args = append(args, typ)
-		}
-		conditions = append(conditions,
-			fmt.Sprintf("%s IN (%s)", col, strings.Join(placeholders, ",")))
-	}
-	if len(conditions) == 0 {
-		return "", nil
-	}
-	return "(" + strings.Join(conditions, " OR ") + ")", args
 }
 
 // buildAggregateSearchParts parses a search query for aggregate views
@@ -808,14 +735,11 @@ func (e *SQLiteEngine) ListMessages(ctx context.Context, filter MessageFilter) (
 			COALESCE(m.snippet, ''),
 			COALESCE(p_sender.email_address, ''),
 			%s,
-			COALESCE(p_sender.phone_number, ''),
 			m.sent_at,
 			COALESCE(m.size_estimate, 0),
 			m.has_attachments,
 			m.attachment_count,
-			m.deleted_from_source_at,
-			COALESCE(m.message_type, ''),
-			COALESCE(conv.title, '')
+			m.deleted_from_source_at
 		FROM messages m
 		%s
 		LEFT JOIN conversations conv ON conv.id = m.conversation_id
@@ -847,14 +771,11 @@ func (e *SQLiteEngine) ListMessages(ctx context.Context, filter MessageFilter) (
 			&msg.Snippet,
 			&msg.FromEmail,
 			&msg.FromName,
-			&msg.FromPhone,
 			&sentAt,
 			&msg.SizeEstimate,
 			&msg.HasAttachments,
 			&msg.AttachmentCount,
 			&deletedAt,
-			&msg.MessageType,
-			&msg.ConversationTitle,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
@@ -970,10 +891,8 @@ func (e *SQLiteEngine) GetTotalStats(ctx context.Context, opts StatsOptions) (*T
 	var searchConditions []string
 	var searchArgs []any
 	var searchFTSJoin string
-	hasSearchMessageTypes := false
 	if opts.SearchQuery != "" {
 		q := search.Parse(opts.SearchQuery)
-		hasSearchMessageTypes = len(q.MessageTypes) > 0
 		searchConditions, searchArgs, searchFTSJoin = e.buildSearchQueryParts(ctx, q)
 	}
 
@@ -981,12 +900,8 @@ func (e *SQLiteEngine) GetTotalStats(ctx context.Context, opts StatsOptions) (*T
 	// the messages table for compatibility with search joins.
 	var conditions []string
 	var args []any
-	// Restrict to email messages only; NULL and '' handle pre-message_type data.
 	// Exclude rows soft-deleted by deduplicate; gate source-deleted on
 	// opts.HideDeletedFromSource via the helper.
-	if !hasSearchMessageTypes {
-		conditions = append(conditions, emailOnlyFilterM)
-	}
 	conditions = append(conditions, store.LiveMessagesWhere("m", opts.HideDeletedFromSource))
 	conditions, args = appendSourceFilter(
 		conditions, args, "m.", opts.SourceID, opts.SourceIDs,
@@ -1144,32 +1059,32 @@ func (e *SQLiteEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFi
 				SELECT 1 FROM message_recipients mr_from
 				JOIN participants p_from ON p_from.id = mr_from.participant_id
 				WHERE mr_from.message_id = m.id AND mr_from.recipient_type = 'from'
-				  AND (p_from.email_address = ? OR p_from.phone_number = ?)
+				  AND p_from.email_address = ?
 				  AND %s = ?
 			)
 			OR EXISTS (
 				SELECT 1 FROM participants p_ds
 				WHERE p_ds.id = m.sender_id
-				  AND (p_ds.email_address = ? OR p_ds.phone_number = ?)
+				  AND p_ds.email_address = ?
 				  AND %s = ?
 			)
 		)`, recipientNameExpr("mr_from", "p_from"), participantNameExpr("p_ds")))
-		args = append(args, filter.Sender, filter.Sender, filter.SenderName, filter.Sender, filter.Sender, filter.SenderName)
+		args = append(args, filter.Sender, filter.SenderName, filter.Sender, filter.SenderName)
 	} else if filter.Sender != "" {
 		conditions = append(conditions, `(
 			EXISTS (
 				SELECT 1 FROM message_recipients mr_from
 				JOIN participants p_from ON p_from.id = mr_from.participant_id
 				WHERE mr_from.message_id = m.id AND mr_from.recipient_type = 'from'
-				  AND (p_from.email_address = ? OR p_from.phone_number = ?)
+				  AND p_from.email_address = ?
 			)
 			OR EXISTS (
 				SELECT 1 FROM participants p_ds
 				WHERE p_ds.id = m.sender_id
-				  AND (p_ds.email_address = ? OR p_ds.phone_number = ?)
+				  AND p_ds.email_address = ?
 			)
 		)`)
-		args = append(args, filter.Sender, filter.Sender, filter.Sender, filter.Sender)
+		args = append(args, filter.Sender, filter.Sender)
 	} else if filter.SenderName != "" {
 		conditions = append(conditions, fmt.Sprintf(`(
 			EXISTS (
@@ -1430,7 +1345,7 @@ func (e *SQLiteEngine) SearchByDomains(ctx context.Context, domains []string, af
 		args = append(args, strings.ToLower(d))
 	}
 
-	conditions := []string{emailOnlyFilterM}
+	var conditions []string
 	// Hide source-deleted rows so this bulk-search surface has the same
 	// live-message semantics as Search/SearchFast.
 	conditions = append(conditions,
@@ -1570,18 +1485,6 @@ func (e *SQLiteEngine) buildSearchQueryParts(ctx context.Context, q *search.Quer
 		}
 	}
 
-	// message_type: filter (e.g. sms, whatsapp, calendar_event). The store
-	// API path (store/api.go) honors q.MessageTypes; the FTS query path must
-	// too, or `--mode=fts` search silently ignores message_type scoping for
-	// every non-email type.
-	if len(q.MessageTypes) > 0 {
-		condition, conditionArgs := sqliteMessageTypeCondition("m", q.MessageTypes)
-		if condition != "" {
-			conditions = append(conditions, condition)
-			args = append(args, conditionArgs...)
-		}
-	}
-
 	// Has attachment filter
 	if q.HasAttachment != nil && *q.HasAttachment {
 		conditions = append(conditions, e.dialect.BoolTrueExpr("m.has_attachments"))
@@ -1681,14 +1584,11 @@ func (e *SQLiteEngine) executeSearchQuery(ctx context.Context, conditions []stri
 			COALESCE(m.snippet, ''),
 			COALESCE(p_sender.email_address, ''),
 			%s,
-			COALESCE(p_sender.phone_number, ''),
 			m.sent_at,
 			COALESCE(m.size_estimate, 0),
 			m.has_attachments,
 			m.attachment_count,
-			m.deleted_from_source_at,
-			COALESCE(m.message_type, ''),
-			COALESCE(conv.title, '')
+			m.deleted_from_source_at
 		FROM messages m
 		%s
 		LEFT JOIN conversations conv ON conv.id = m.conversation_id
@@ -1720,14 +1620,11 @@ func (e *SQLiteEngine) executeSearchQuery(ctx context.Context, conditions []stri
 			&msg.Snippet,
 			&msg.FromEmail,
 			&msg.FromName,
-			&msg.FromPhone,
 			&sentAt,
 			&msg.SizeEstimate,
 			&msg.HasAttachments,
 			&msg.AttachmentCount,
 			&deletedAt,
-			&msg.MessageType,
-			&msg.ConversationTitle,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
@@ -1759,9 +1656,9 @@ func (e *SQLiteEngine) executeSearchQuery(ctx context.Context, conditions []stri
 //
 // Note on semantics: Appending to FromAddrs/ToAddrs produces OR semantics
 // within each dimension (IN clause). Labels use per-term EXISTS subqueries
-// with AND semantics (message must have all labels). MessageType and date
-// filters are scoped intersections so an in-view search cannot widen outside
-// the current drill-down context.
+// with AND semantics (message must have all labels). Date filters are scoped
+// intersections so an in-view search cannot widen outside the current
+// drill-down context.
 func MergeFilterIntoQuery(q *search.Query, filter MessageFilter) *search.Query {
 	// Copy all fields from original query (preserves any future non-slice fields)
 	merged := *q
@@ -1775,7 +1672,6 @@ func MergeFilterIntoQuery(q *search.Query, filter MessageFilter) *search.Query {
 	merged.BccAddrs = append([]string(nil), q.BccAddrs...)
 	merged.SubjectTerms = append([]string(nil), q.SubjectTerms...)
 	merged.Labels = append([]string(nil), q.Labels...)
-	merged.MessageTypes = append([]string(nil), q.MessageTypes...)
 	// Deep-copy AccountIDs alongside the other slices so the merged
 	// query never aliases the original's slice header. Filter overrides
 	// below replace the deep-copied slice when set.
@@ -1808,17 +1704,6 @@ func MergeFilterIntoQuery(q *search.Query, filter MessageFilter) *search.Query {
 	// Label filter - append to existing label: filters
 	if filter.Label != "" {
 		merged.Labels = append(merged.Labels, filter.Label)
-	}
-
-	// message_type filter - scope FTS search to the drill-down context's
-	// type (e.g. Texts mode → sms/mms). Without this, SearchFast within a
-	// type-scoped view would silently widen back to all message types.
-	if filter.MessageType != "" {
-		messageTypes, noMatches := ScopedMessageTypes(merged.MessageTypes, filter.MessageType)
-		merged.MessageTypes = messageTypes
-		if noMatches {
-			merged.AccountIDs = []int64{}
-		}
 	}
 
 	// Attachment filter - set if context requires attachments

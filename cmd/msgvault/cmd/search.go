@@ -135,7 +135,7 @@ func outputSearchResultsTable(out io.Writer, results []query.MessageSummary) err
 }
 
 func summaryFromDisplay(msg query.MessageSummary) string {
-	for _, value := range []string{msg.FromEmail, msg.FromName, msg.FromPhone} {
+	for _, value := range []string{msg.FromEmail, msg.FromName} {
 		if strings.TrimSpace(value) != "" {
 			return value
 		}

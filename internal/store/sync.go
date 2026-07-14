@@ -82,7 +82,7 @@ func scanSource(sc scanner) (*Source, error) {
 	var createdAt, updatedAt sql.NullTime
 	err := sc.Scan(
 		&source.ID, &source.SourceType, &source.Identifier, &source.DisplayName,
-		&source.GoogleUserID, &source.LastSyncAt, &source.SyncCursor, &source.SyncConfig,
+		&source.GoogleUserID, &source.LastSyncAt, &source.SyncCursor,
 		&source.OAuthApp, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -544,16 +544,15 @@ func (s *Store) GetLastSuccessfulSync(sourceID int64) (*SyncRun, error) {
 	return run, err
 }
 
-// Source represents a Gmail account or other message source.
+// Source represents a Gmail account.
 type Source struct {
 	ID           int64
-	SourceType   string // "gmail" or "imap"
-	Identifier   string // email address or IMAP identifier URL
+	SourceType   string // "gmail"
+	Identifier   string // email address
 	DisplayName  sql.NullString
 	GoogleUserID sql.NullString
 	LastSyncAt   sql.NullTime
 	SyncCursor   sql.NullString // historyId for Gmail
-	SyncConfig   sql.NullString // JSON config for IMAP sources
 	OAuthApp     sql.NullString // named OAuth app binding (NULL = default)
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -565,6 +564,9 @@ type Source struct {
 // conflict path so the second caller receives the existing row's
 // fields instead of a unique-violation error.
 func (s *Store) GetOrCreateSource(sourceType, identifier string) (*Source, error) {
+	if sourceType != "gmail" {
+		return nil, fmt.Errorf("source_type %q is unsupported; only gmail is allowed", sourceType)
+	}
 	now := s.dialect.Now()
 	row := s.db.QueryRow(fmt.Sprintf(`
 		INSERT INTO sources (source_type, identifier, created_at, updated_at)
@@ -572,7 +574,7 @@ func (s *Store) GetOrCreateSource(sourceType, identifier string) (*Source, error
 		ON CONFLICT (source_type, identifier) DO UPDATE
 		SET identifier = sources.identifier
 		RETURNING id, source_type, identifier, display_name, google_user_id,
-		          last_sync_at, sync_cursor, sync_config, oauth_app,
+		          last_sync_at, sync_cursor, oauth_app,
 		          created_at, updated_at
 	`, now, now), sourceType, identifier)
 
@@ -616,7 +618,7 @@ func (s *Store) ListSources(sourceType string) ([]*Source, error) {
 	if sourceType != "" {
 		rows, err = s.db.Query(`
 			SELECT id, source_type, identifier, display_name, google_user_id,
-			       last_sync_at, sync_cursor, sync_config, oauth_app,
+			       last_sync_at, sync_cursor, oauth_app,
 			       created_at, updated_at
 			FROM sources
 			WHERE source_type = ?
@@ -625,7 +627,7 @@ func (s *Store) ListSources(sourceType string) ([]*Source, error) {
 	} else {
 		rows, err = s.db.Query(`
 			SELECT id, source_type, identifier, display_name, google_user_id,
-			       last_sync_at, sync_cursor, sync_config, oauth_app,
+			       last_sync_at, sync_cursor, oauth_app,
 			       created_at, updated_at
 			FROM sources
 			ORDER BY identifier
@@ -661,21 +663,7 @@ func (s *Store) UpdateSourceDisplayName(sourceID int64, displayName string) erro
 	return err
 }
 
-// UpdateSourceSyncConfig updates the JSON sync configuration for an IMAP source.
-// The sync_config column is JSONB on PG; the dialect supplies the
-// appropriate placeholder cast (?::JSONB on PG, bare ? on SQLite).
-func (s *Store) UpdateSourceSyncConfig(sourceID int64, configJSON string) error {
-	_, err := s.db.Exec(fmt.Sprintf(`
-		UPDATE sources
-		SET sync_config = %s, updated_at = %s
-		WHERE id = ?
-	`, s.dialect.JSONBindExpr(), s.dialect.Now()), configJSON, sourceID)
-	return err
-}
-
 // UpdateSourceIdentifier updates the identifier column for an existing source.
-// Used by add-o365 to fix up the IMAP host when re-authorizing an account
-// whose host classification changed (e.g. personal vs org scope correction).
 func (s *Store) UpdateSourceIdentifier(sourceID int64, identifier string) error {
 	_, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE sources
@@ -689,7 +677,7 @@ func (s *Store) UpdateSourceIdentifier(sourceID int64, identifier string) error 
 func (s *Store) GetSourceByIdentifier(identifier string) (*Source, error) {
 	row := s.db.QueryRow(`
 		SELECT id, source_type, identifier, display_name, google_user_id,
-		       last_sync_at, sync_cursor, sync_config, oauth_app,
+		       last_sync_at, sync_cursor, oauth_app,
 		       created_at, updated_at
 		FROM sources
 		WHERE identifier = ?

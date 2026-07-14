@@ -23,8 +23,8 @@ func seedLiveMessages(tb testing.TB, s *Store, n int) {
 		`INSERT INTO sources (id, source_type, identifier) VALUES (1, 'gmail', 'bench@example.com')`)
 	require.NoError(tb, err)
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO conversations (id, source_id, source_conversation_id, conversation_type)
-		 VALUES (1, 1, 'conv1', 'email')`)
+		`INSERT INTO conversations (id, source_id, source_conversation_id)
+		 VALUES (1, 1, 'conv1')`)
 	require.NoError(tb, err)
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO participants (id, email_address, display_name) VALUES (1, 'sender@example.com', 'Sender')`)
@@ -33,9 +33,9 @@ func seedLiveMessages(tb testing.TB, s *Store, n int) {
 	tx, err := s.db.Begin()
 	require.NoError(tb, err)
 	msgStmt, err := tx.Prepare(`INSERT INTO messages
-		(id, conversation_id, source_id, source_message_id, message_type,
+		(id, conversation_id, source_id, source_message_id,
 		 sent_at, subject, snippet, size_estimate, deleted_from_source_at)
-		VALUES (?, 1, 1, ?, 'email', ?, ?, ?, ?, ?)`)
+		VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?)`)
 	require.NoError(tb, err)
 	defer func() { _ = msgStmt.Close() }()
 	recStmt, err := tx.Prepare(`INSERT INTO message_recipients
@@ -105,7 +105,7 @@ func TestListMessages_UsesLiveIndex(t *testing.T) {
 
 	pageSQL := fmt.Sprintf(`SELECT m.id FROM messages m
 		WHERE %s
-		ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC, m.id DESC
+		ORDER BY COALESCE(m.sent_at, m.internal_date) DESC, m.id DESC
 		LIMIT 20 OFFSET 0`, LiveMessagesWhere("m", true))
 	pagePlan := explainPlan(t, s, pageSQL)
 	assert.Contains(pagePlan, "idx_messages_live_sent_at",

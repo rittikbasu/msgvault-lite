@@ -31,7 +31,6 @@ func seedDirectCLIArchive(t *testing.T) (string, int64) {
 		ConversationID:  conversationID,
 		SourceID:        source.ID,
 		SourceMessageID: "gmail-needle-1",
-		MessageType:     "email",
 		SentAt:          sql.NullTime{Time: time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC), Valid: true},
 		Subject:         sql.NullString{String: "Needle subject", Valid: true},
 		Snippet:         sql.NullString{String: "needle preview", Valid: true},

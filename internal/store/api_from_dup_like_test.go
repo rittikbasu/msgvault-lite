@@ -45,7 +45,6 @@ func TestSearchMessagesLike_MultipleFromRows_NoDuplication(t *testing.T) {
 			ConversationID:  convID,
 			SourceID:        src.ID,
 			SourceMessageID: fmt.Sprintf("fromduplike-msg-%d", i),
-			MessageType:     "email",
 			SentAt:          sql.NullTime{Time: sameTime, Valid: true},
 			Subject:         sql.NullString{String: tag + " " + strconv.Itoa(i), Valid: true},
 			Snippet:         sql.NullString{String: tag + " snippet", Valid: true},

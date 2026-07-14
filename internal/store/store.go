@@ -492,7 +492,7 @@ func (s *Store) InitSchema() error {
 
 	// Partial covering index for the ListMessages page (GET /api/v1/messages).
 	// That query counts and paginates live messages ordered by
-	// COALESCE(sent_at, received_at, internal_date) DESC, id DESC. Without an
+	// COALESCE(sent_at, internal_date) DESC, id DESC. Without an
 	// index matching both the live-messages predicate and that sort key, SQLite
 	// falls back to a full scan of the messages table (multiple GB on a large
 	// archive) plus a temp-B-tree sort for every page — measured at seconds per
@@ -503,7 +503,7 @@ func (s *Store) InitSchema() error {
 	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
 		_, err := tx.ExecContext(ctx, `
 			CREATE INDEX IF NOT EXISTS idx_messages_live_sent_at
-			    ON messages(COALESCE(sent_at, received_at, internal_date) DESC, id DESC)
+			    ON messages(COALESCE(sent_at, internal_date) DESC, id DESC)
 			    WHERE deleted_from_source_at IS NULL
 		`)
 		return err

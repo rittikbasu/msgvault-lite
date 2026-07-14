@@ -32,7 +32,6 @@ func TestSearchMessagesQueryImpl_NoFTS_TokenlessTerms(t *testing.T) {
 			ConversationID:  convID,
 			SourceID:        src.ID,
 			SourceMessageID: fmt.Sprintf("nofts-msg-%d", i),
-			MessageType:     "email",
 			Subject:         sql.NullString{String: sub, Valid: true},
 			Snippet:         sql.NullString{String: "weekly snippet", Valid: true},
 			SizeEstimate:    100,

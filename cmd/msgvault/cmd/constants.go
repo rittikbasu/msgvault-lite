@@ -1,13 +1,8 @@
 package cmd
 
-// Source-type identifiers stored in sources.source_type and matched against
-// when dispatching sync/import logic per account kind.
+// Source-type identifier stored in sources.source_type.
 const (
-	sourceTypeGmail    = "gmail"
-	sourceTypeIMAP     = "imap"
-	sourceTypeMbox     = "mbox"
-	sourceTypeTeams    = "teams"
-	sourceTypeCalendar = "gcal"
+	sourceTypeGmail = "gmail"
 )
 
 // SQLite table names used as structured log keys.

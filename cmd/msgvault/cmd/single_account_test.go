@@ -37,12 +37,9 @@ func TestSingleGmailSyncSourceRejectsMultipleSources(t *testing.T) {
 
 func TestSingleGmailSyncSourceRejectsNonGmailSource(t *testing.T) {
 	st := testutil.NewTestStore(t)
-	_, err := st.GetOrCreateSource(sourceTypeIMAP, "test@example.com")
-	require.NoError(t, err)
-
-	_, err = singleGmailSyncSource(st, nil)
+	_, err := st.GetOrCreateSource("imap", "test@example.com")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "supports Gmail only")
+	assert.ErrorContains(t, err, "only gmail is allowed")
 }
 
 func TestValidateSingleGmailArchive(t *testing.T) {
@@ -56,10 +53,7 @@ func TestValidateSingleGmailArchive(t *testing.T) {
 
 func TestValidateSingleGmailArchiveRejectsOtherSourceTypes(t *testing.T) {
 	st := testutil.NewTestStore(t)
-	_, err := st.GetOrCreateSource(sourceTypeIMAP, "test@example.com")
-	require.NoError(t, err)
-
-	err = validateSingleGmailArchive(st, "test@example.com")
+	_, err := st.GetOrCreateSource("imap", "test@example.com")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "exactly one Gmail source")
+	assert.ErrorContains(t, err, "only gmail is allowed")
 }

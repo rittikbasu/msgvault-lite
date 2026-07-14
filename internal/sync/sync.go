@@ -24,10 +24,6 @@ var ErrHistoryExpired = errors.New("history expired - run full sync")
 
 // Options configures sync behavior.
 type Options struct {
-	// SourceType is the type of source being synced ("gmail" or "imap").
-	// Defaults to "gmail" if empty.
-	SourceType string
-
 	// Query is an optional Gmail search query (e.g., "before:2020/01/01")
 	Query string
 
@@ -50,8 +46,7 @@ type Options struct {
 // DefaultOptions returns sensible defaults.
 func DefaultOptions() *Options {
 	return &Options{
-		BatchSize:  10,
-		SourceType: "gmail",
+		BatchSize: 10,
 	}
 }
 
@@ -259,12 +254,8 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 	startTime := time.Now()
 	summary = &gmail.SyncSummary{StartTime: startTime}
 
-	// Get or create source
-	sourceType := s.opts.SourceType
-	if sourceType == "" {
-		sourceType = "gmail"
-	}
-	source, err := s.store.GetOrCreateSource(sourceType, email)
+	// Get or create Gmail source.
+	source, err := s.store.GetOrCreateSource("gmail", email)
 	if err != nil {
 		return nil, fmt.Errorf("get/create source: %w", err)
 	}
@@ -503,16 +494,6 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 			"error", errMsg)
 	}
 
-	// For IMAP sources, the API provides no real thread info —
-	// ThreadID is just the composite message ID. Derive a thread
-	// key from MIME threading headers to group related messages
-	// into conversations.
-	if s.opts.SourceType == "imap" {
-		if derived := deriveThreadKey(parsed); derived != "" {
-			threadID = derived
-		}
-	}
-
 	// Ensure all text fields are valid UTF-8
 	subject := textutil.EnsureUTF8(parsed.Subject)
 	bodyText := textutil.EnsureUTF8(parsed.GetBodyText())
@@ -560,19 +541,10 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 		return nil, fmt.Errorf("ensure conversation: %w", err)
 	}
 
-	// Build message record
-	rfc822ID := sql.NullString{}
-	if parsed.MessageID != "" {
-		rfc822ID = sql.NullString{
-			String: parsed.MessageID, Valid: true,
-		}
-	}
 	msg := &store.Message{
 		ConversationID:  conversationID,
 		SourceID:        sourceID,
 		SourceMessageID: raw.ID,
-		RFC822MessageID: rfc822ID,
-		MessageType:     "email",
 		SenderID:        senderID,
 		Subject:         sql.NullString{String: subject, Valid: subject != ""},
 		Snippet:         sql.NullString{String: snippet, Valid: snippet != ""},

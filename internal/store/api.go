@@ -14,21 +14,17 @@ import (
 // participantDisplaySQL formats a participant joined as `p` (with the
 // optional per-recipient `mr.display_name` row) into one display string
 // the way the query-backed engines do: "Name <addr>" when both name
-// and addr are present, otherwise the bare email/phone, otherwise the
-// bare name. The store-backed API used to read only p.email_address,
-// which dropped phone-only and identifier-only participants (synctech
-// SMS/MMS, etc.). Standard SQL (CASE + ||) — works on SQLite and PG.
+// and addr are present, otherwise the bare email, otherwise the bare name.
 const participantDisplaySQL = `COALESCE(
 		CASE
 			WHEN COALESCE(NULLIF(TRIM(mr.display_name), ''), NULLIF(TRIM(p.display_name), '')) <> ''
-			  AND COALESCE(NULLIF(p.email_address, ''), NULLIF(p.phone_number, '')) <> ''
+			  AND COALESCE(NULLIF(p.email_address, ''), '') <> ''
 			THEN COALESCE(NULLIF(TRIM(mr.display_name), ''), TRIM(p.display_name))
 				|| ' <'
-				|| COALESCE(NULLIF(p.email_address, ''), p.phone_number)
+				|| COALESCE(NULLIF(p.email_address, ''), '')
 				|| '>'
 			ELSE COALESCE(
 				NULLIF(p.email_address, ''),
-				NULLIF(p.phone_number, ''),
 				NULLIF(TRIM(mr.display_name), ''),
 				NULLIF(TRIM(p.display_name), ''),
 				''
@@ -39,11 +35,9 @@ const participantDisplaySQL = `COALESCE(
 
 const participantSenderEmailSQL = `COALESCE(NULLIF(p.email_address, ''), '')`
 const participantSenderNameSQL = `COALESCE(NULLIF(TRIM(COALESCE(NULLIF(mr.display_name, ''), p.display_name)), ''), '')`
-const participantSenderPhoneSQL = `COALESCE(NULLIF(p.phone_number, ''), '')`
 const participantSummarySenderSQL = participantDisplaySQL + ` as from_display,
 			` + participantSenderEmailSQL + ` as from_email,
-			` + participantSenderNameSQL + ` as from_name,
-			` + participantSenderPhoneSQL + ` as from_phone`
+			` + participantSenderNameSQL + ` as from_name`
 
 // APIMessage represents a message for API responses.
 type APIMessage struct {
@@ -52,11 +46,9 @@ type APIMessage struct {
 	ConversationID       int64
 	SourceConversationID string
 	Subject              string
-	MessageType          string
 	From                 string
 	FromEmail            string
 	FromName             string
-	FromPhone            string
 	To                   []string
 	Cc                   []string
 	Bcc                  []string
@@ -110,9 +102,8 @@ func (s *Store) ListMessagesContext(ctx context.Context, offset, limit int) ([]A
 			COALESCE(m.conversation_id, 0) as conversation_id,
 			COALESCE(c.source_conversation_id, '') as source_conversation_id,
 			COALESCE(m.subject, '') as subject,
-			COALESCE(m.message_type, '') as message_type,
 			%s,
-			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.sent_at, m.internal_date) as sent_at,
 			COALESCE(m.snippet, '') as snippet,
 			m.has_attachments,
 			m.size_estimate
@@ -125,7 +116,7 @@ func (s *Store) ListMessagesContext(ctx context.Context, offset, limit int) ([]A
 		LEFT JOIN participants p ON p.id = COALESCE(m.sender_id, mr.participant_id)
 		LEFT JOIN conversations c ON c.id = m.conversation_id
 		WHERE %s
-		ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC, m.id DESC
+		ORDER BY COALESCE(m.sent_at, m.internal_date) DESC, m.id DESC
 		LIMIT ? OFFSET ?
 	`, participantSummarySenderSQL, LiveMessagesWhere("m", true))
 
@@ -175,9 +166,8 @@ func (s *Store) GetMessageContext(ctx context.Context, id int64) (*APIMessage, e
 			COALESCE(m.conversation_id, 0) as conversation_id,
 			COALESCE(c.source_conversation_id, '') as source_conversation_id,
 			COALESCE(m.subject, '') as subject,
-			COALESCE(m.message_type, '') as message_type,
 			%s,
-			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.sent_at, m.internal_date) as sent_at,
 			COALESCE(m.snippet, '') as snippet,
 			m.has_attachments,
 			m.size_estimate,
@@ -205,11 +195,9 @@ func (s *Store) GetMessageContext(ctx context.Context, id int64) (*APIMessage, e
 		&m.ConversationID,
 		&m.SourceConversationID,
 		&m.Subject,
-		&m.MessageType,
 		&m.From,
 		&m.FromEmail,
 		&m.FromName,
-		&m.FromPhone,
 		&sentAt,
 		&m.Snippet,
 		&m.HasAttachments,
@@ -488,23 +476,11 @@ func (s *Store) searchMessagesQueryImpl(
 		args = append(args, "%"+escapeLike(strings.ToLower(term))+"%")
 	}
 
-	// message_type: / message_type= filter.
-	if len(q.MessageTypes) > 0 {
-		placeholders := make([]string, len(q.MessageTypes))
-		for i, typ := range q.MessageTypes {
-			placeholders[i] = "?"
-			args = append(args, typ)
-		}
-		conditions = append(conditions,
-			"m.message_type IN ("+strings.Join(placeholders, ",")+")")
-	}
-
 	// Account scoping (in: / API account/collection filter). The HTTP
 	// search endpoints resolve an account or collection to its source IDs
 	// and put them here; without this condition the scope is validated at
 	// the front door and then silently dropped, returning every account's
-	// messages. Uses the same IN-placeholder style as message_type so it
-	// works on both SQLite and PostgreSQL after Rebind.
+	// messages.
 	if len(q.AccountIDs) > 0 {
 		placeholders := make([]string, len(q.AccountIDs))
 		for i, id := range q.AccountIDs {
@@ -543,12 +519,12 @@ func (s *Store) searchMessagesQueryImpl(
 	// the query engine, which binds time.Time the same way. [cr2-9]
 	if q.AfterDate != nil {
 		conditions = append(conditions,
-			"COALESCE(m.sent_at, m.received_at, m.internal_date) >= ?")
+			"COALESCE(m.sent_at, m.internal_date) >= ?")
 		args = append(args, *q.AfterDate)
 	}
 	if q.BeforeDate != nil {
 		conditions = append(conditions,
-			"COALESCE(m.sent_at, m.received_at, m.internal_date) < ?")
+			"COALESCE(m.sent_at, m.internal_date) < ?")
 		args = append(args, *q.BeforeDate)
 	}
 
@@ -571,7 +547,7 @@ func (s *Store) searchMessagesQueryImpl(
 	}
 
 	// Results query.
-	orderBy := "COALESCE(m.sent_at, m.received_at, m.internal_date) DESC, m.id DESC"
+	orderBy := "COALESCE(m.sent_at, m.internal_date) DESC, m.id DESC"
 	if ftsEnabled {
 		orderBy = ftsOrder + ", " + orderBy
 	}
@@ -582,9 +558,8 @@ func (s *Store) searchMessagesQueryImpl(
 			COALESCE(m.conversation_id, 0) as conversation_id,
 			COALESCE(c.source_conversation_id, '') as source_conversation_id,
 			COALESCE(m.subject, '') as subject,
-			COALESCE(m.message_type, '') as message_type,
 			%s,
-			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.sent_at, m.internal_date) as sent_at,
 			COALESCE(m.snippet, '') as snippet,
 			m.has_attachments,
 			m.size_estimate
@@ -679,9 +654,8 @@ func (s *Store) searchMessagesLike(query string, offset, limit int) ([]APIMessag
 			COALESCE(m.conversation_id, 0) as conversation_id,
 			COALESCE(c.source_conversation_id, '') as source_conversation_id,
 			COALESCE(m.subject, '') as subject,
-			COALESCE(m.message_type, '') as message_type,
 			%s,
-			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.sent_at, m.internal_date) as sent_at,
 			COALESCE(m.snippet, '') as snippet,
 			m.has_attachments,
 			m.size_estimate
@@ -695,7 +669,7 @@ func (s *Store) searchMessagesLike(query string, offset, limit int) ([]APIMessag
 		LEFT JOIN conversations c ON c.id = m.conversation_id
 		WHERE %s
 		AND (LOWER(m.subject) LIKE ? ESCAPE '\' OR LOWER(m.snippet) LIKE ? ESCAPE '\')
-		ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC, m.id DESC
+		ORDER BY COALESCE(m.sent_at, m.internal_date) DESC, m.id DESC
 		LIMIT ? OFFSET ?
 	`, participantSummarySenderSQL, LiveMessagesWhere("m", true))
 
@@ -763,11 +737,11 @@ func (n *nullableTimestamp) Scan(src any) error {
 
 // scanMessageRows scans the standard message row set
 // (id, source_message_id, conversation_id, source_conversation_id, subject,
-// message_type, from_display, from_email, from_name, from_phone, sent_at,
-// snippet, has_attachments, size_estimate). All SELECT statements that feed
-// this scanner must produce the same column order.
+// from_display, from_email, from_name, sent_at, snippet, has_attachments,
+// size_estimate). All SELECT statements that feed this scanner must produce
+// the same column order.
 // Timestamps go through nullableTimestamp because the sent_at column
-// is a COALESCE(m.sent_at, m.received_at, m.internal_date) computed
+// is a COALESCE(m.sent_at, m.internal_date) computed
 // expression with no declared datetime type, which on SQLite can come
 // back as TEXT and trip sql.NullTime.Scan. pgx/v5 still delivers
 // time.Time, which nullableTimestamp also handles.
@@ -783,11 +757,9 @@ func scanMessageRows(rows *loggedRows) ([]APIMessage, []int64, error) {
 			&m.ConversationID,
 			&m.SourceConversationID,
 			&m.Subject,
-			&m.MessageType,
 			&m.From,
 			&m.FromEmail,
 			&m.FromName,
-			&m.FromPhone,
 			&sentAt,
 			&m.Snippet,
 			&m.HasAttachments,

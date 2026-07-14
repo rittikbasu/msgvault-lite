@@ -49,7 +49,6 @@ func TestDateBoundary_StoreAPIMatchesEngine(t *testing.T) {
 		ConversationID:  convID,
 		SourceID:        src.ID,
 		SourceMessageID: gmailID,
-		MessageType:     "email",
 		SentAt:          sql.NullTime{Time: midnight, Valid: true},
 		Subject:         sql.NullString{String: "boundary", Valid: true},
 		SizeEstimate:    1000,

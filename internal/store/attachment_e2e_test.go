@@ -54,7 +54,6 @@ func (c *attachmentCorpus) addMessage(gmailID string, sourceID, convID int64) in
 		ConversationID:  convID,
 		SourceID:        sourceID,
 		SourceMessageID: gmailID,
-		MessageType:     "email",
 		SizeEstimate:    100,
 	})
 	require.NoErrorf(c.t, err, "UpsertMessage(%s)", gmailID)
@@ -117,7 +116,6 @@ func TestGetMessageIncludesAttachmentWithNullableMetadata(t *testing.T) {
 		ConversationID:  convID,
 		SourceID:        src.ID,
 		SourceMessageID: "nullhash-msg",
-		MessageType:     "email",
 		Subject:         sql.NullString{String: "Attachment", Valid: true},
 		SizeEstimate:    100,
 	})

@@ -44,7 +44,6 @@ func TestStoreAPI_PaginationStability_IdenticalSentAt(t *testing.T) {
 			ConversationID:  convID,
 			SourceID:        src.ID,
 			SourceMessageID: fmt.Sprintf("api-page-msg-%d", i),
-			MessageType:     "email",
 			SentAt:          sql.NullTime{Time: sameTime, Valid: true},
 			Subject:         sql.NullString{String: subjectTag + " " + strconv.Itoa(i), Valid: true},
 			Snippet:         sql.NullString{String: "snippet", Valid: true},

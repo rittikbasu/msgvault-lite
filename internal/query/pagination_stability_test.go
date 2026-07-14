@@ -46,7 +46,6 @@ func seedPaginationStabilityFixture(t *testing.T, st *store.Store) (*store.Sourc
 			ConversationID:  convID,
 			SourceID:        src.ID,
 			SourceMessageID: fmt.Sprintf("page-msg-%d", i),
-			MessageType:     "email",
 			SentAt:          sql.NullTime{Time: sameTime, Valid: true},
 			Subject:         sql.NullString{String: paginationStabilitySubjectTag + " " + strconv.Itoa(i), Valid: true},
 			Snippet:         sql.NullString{String: "snippet", Valid: true},

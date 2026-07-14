@@ -15,38 +15,23 @@ import (
 	"go.kenn.io/msgvault/internal/store"
 )
 
-const messageTypeEmail = "email"
-
-// emailOnlyFilterM is the SQL condition restricting to email messages with "m." alias (SQLite).
-// NULL and empty string handle old data where message_type was not yet populated.
-const emailOnlyFilterM = "(m.message_type = '" + messageTypeEmail + "' OR m.message_type IS NULL OR m.message_type = '')"
-
 // participantNameExpr returns the SQL expression for a participant's display
-// label, falling back through display_name → phone_number → email_address.
-// Used by name-based aggregates and filters so phone-only participants
-// (typically iMessage/SMS handles imported without a matching contacts entry)
-// surface under their phone number instead of vanishing because email_address
-// is NULL. alias is the participants-table alias (e.g. "p", "p_filter_to").
-// NULLIF handles both NULL and empty phone numbers.
+// label, falling back from display_name to email_address.
 func participantNameExpr(alias string) string {
 	return fmt.Sprintf(
-		"COALESCE(NULLIF(TRIM(%s.display_name), ''), NULLIF(%s.phone_number, ''), %s.email_address)",
-		alias, alias, alias,
+		"COALESCE(NULLIF(TRIM(%s.display_name), ''), %s.email_address)",
+		alias, alias,
 	)
 }
 
 // recipientNameExpr returns the SQL expression for a from/to label tied to a
 // specific message_recipients row. Prefers mr.display_name (per-message Gmail
 // "From: Bob <...>" override) and otherwise falls through to the participant's
-// own name, phone, or email. Empty strings count as missing — iMessage rows
-// land in message_recipients with an empty (non-NULL) display_name, so a
-// plain COALESCE would let that empty value mask the backfilled contact name
-// on the participant. mrAlias/pAlias are the message_recipients and
-// participants table aliases (typically "mr" and "p").
+// own name or email.
 func recipientNameExpr(mrAlias, pAlias string) string {
 	return fmt.Sprintf(
-		"COALESCE(NULLIF(TRIM(%s.display_name), ''), NULLIF(TRIM(%s.display_name), ''), NULLIF(%s.phone_number, ''), %s.email_address, '')",
-		mrAlias, pAlias, pAlias, pAlias,
+		"COALESCE(NULLIF(TRIM(%s.display_name), ''), NULLIF(TRIM(%s.display_name), ''), %s.email_address, '')",
+		mrAlias, pAlias, pAlias,
 	)
 }
 
@@ -139,7 +124,7 @@ func fetchParticipantsForMessageList(ctx context.Context, db *sql.DB, rebind reb
 	rows, err := db.QueryContext(ctx, rebind(fmt.Sprintf(`
 		SELECT mr.message_id,
 		       mr.recipient_type,
-		       COALESCE(NULLIF(p.email_address, ''), NULLIF(p.phone_number, ''), ''),
+		       COALESCE(NULLIF(p.email_address, ''), ''),
 		       %s
 		FROM %smessage_recipients mr
 		JOIN %sparticipants p ON p.id = mr.participant_id
@@ -210,7 +195,7 @@ func fetchMessageLabelsDetail(ctx context.Context, db *sql.DB, rebind rebindFunc
 // rebind rewrites ? placeholders when needed.
 func fetchParticipantsShared(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, msg *MessageDetail) error {
 	rows, err := db.QueryContext(ctx, rebind(fmt.Sprintf(`
-		SELECT mr.recipient_type, COALESCE(NULLIF(p.email_address, ''), NULLIF(p.phone_number, ''), ''), %s
+		SELECT mr.recipient_type, COALESCE(NULLIF(p.email_address, ''), ''), %s
 		FROM %smessage_recipients mr
 		JOIN %sparticipants p ON p.id = mr.participant_id
 		WHERE mr.message_id = ?
@@ -362,10 +347,8 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, rebind rebindFunc,
 			m.conversation_id,
 			COALESCE(conv.source_conversation_id, ''),
 			COALESCE(m.subject, ''),
-			COALESCE(m.message_type, ''),
 			COALESCE(m.snippet, ''),
 			m.sent_at,
-			m.received_at,
 			COALESCE(m.size_estimate, 0),
 			m.has_attachments,
 			m.deleted_from_source_at
@@ -375,17 +358,15 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, rebind rebindFunc,
 	`, tablePrefix, tablePrefix, whereClause)
 
 	var msg MessageDetail
-	var sentAt, receivedAt, deletedAt sql.NullTime
+	var sentAt, deletedAt sql.NullTime
 	err := db.QueryRowContext(ctx, rebind(query), args...).Scan(
 		&msg.ID,
 		&msg.SourceMessageID,
 		&msg.ConversationID,
 		&msg.SourceConversationID,
 		&msg.Subject,
-		&msg.MessageType,
 		&msg.Snippet,
 		&sentAt,
-		&receivedAt,
 		&msg.SizeEstimate,
 		&msg.HasAttachments,
 		&deletedAt,
@@ -399,10 +380,6 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, rebind rebindFunc,
 
 	if sentAt.Valid {
 		msg.SentAt = sentAt.Time
-	}
-	if receivedAt.Valid {
-		t := receivedAt.Time
-		msg.ReceivedAt = &t
 	}
 	if deletedAt.Valid {
 		t := deletedAt.Time

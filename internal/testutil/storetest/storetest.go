@@ -45,7 +45,6 @@ func (f *Fixture) CreateMessage(sourceMessageID string) int64 {
 		ConversationID:  f.ConvID,
 		SourceID:        f.Source.ID,
 		SourceMessageID: sourceMessageID,
-		MessageType:     "email",
 		SizeEstimate:    1000,
 	})
 	require.NoError(f.T, err, "CreateMessage")
@@ -241,7 +240,6 @@ func NewMessage(sourceID, convID int64) *MessageBuilder {
 			ConversationID:  convID,
 			SourceID:        sourceID,
 			SourceMessageID: fmt.Sprintf("test-msg-%d", globalCounter.Add(1)),
-			MessageType:     "email",
 			SizeEstimate:    1000,
 		},
 	}
@@ -256,7 +254,6 @@ func (f *Fixture) NewMessage() *MessageBuilder {
 			ConversationID:  f.ConvID,
 			SourceID:        f.Source.ID,
 			SourceMessageID: fmt.Sprintf("fixture-msg-%d", f.msgCounter.Add(1)),
-			MessageType:     "email",
 			SizeEstimate:    1000,
 		},
 	}
@@ -287,11 +284,6 @@ func (b *MessageBuilder) WithSentAt(t time.Time) *MessageBuilder {
 	return b
 }
 
-func (b *MessageBuilder) WithReceivedAt(t time.Time) *MessageBuilder {
-	b.msg.ReceivedAt = sql.NullTime{Time: t, Valid: true}
-	return b
-}
-
 func (b *MessageBuilder) WithInternalDate(t time.Time) *MessageBuilder {
 	b.msg.InternalDate = sql.NullTime{Time: t, Valid: true}
 	return b
@@ -301,11 +293,6 @@ func (b *MessageBuilder) WithInternalDate(t time.Time) *MessageBuilder {
 func (b *MessageBuilder) WithAttachmentCount(count int) *MessageBuilder {
 	b.msg.HasAttachments = count > 0
 	b.msg.AttachmentCount = count
-	return b
-}
-
-func (b *MessageBuilder) WithIsFromMe(v bool) *MessageBuilder {
-	b.msg.IsFromMe = v
 	return b
 }
 

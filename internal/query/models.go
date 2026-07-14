@@ -28,7 +28,6 @@ type MessageSummary struct {
 	Snippet              string     `json:"snippet"`
 	FromEmail            string     `json:"from_email"`
 	FromName             string     `json:"from_name"`
-	FromPhone            string     `json:"from_phone,omitempty"` // Phone number (for WhatsApp/chat sources)
 	To                   []Address  `json:"to,omitempty"`
 	Cc                   []Address  `json:"cc,omitempty"`
 	Bcc                  []Address  `json:"bcc,omitempty"`
@@ -37,10 +36,8 @@ type MessageSummary struct {
 	HasAttachments       bool       `json:"has_attachments"`
 	AttachmentCount      int        `json:"attachment_count"`
 	Labels               []string   `json:"labels"`
-	DeletedAt            *time.Time `json:"deleted_at,omitempty"`         // When message was deleted from server (nil if not deleted)
-	MessageType          string     `json:"message_type,omitempty"`       // e.g., "email", "whatsapp" — from messages.message_type
-	ConversationTitle    string     `json:"conversation_title,omitempty"` // Group/chat name from conversations.title
-	BodyText             string     `json:"body_text,omitempty"`          // Full body text (only populated for timeline views)
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"` // When message was deleted from server (nil if not deleted)
+	BodyText             string     `json:"body_text,omitempty"`  // Full body text (only populated for timeline views)
 }
 
 // MessageDetail represents a full message with body and attachments.
@@ -50,10 +47,8 @@ type MessageDetail struct {
 	ConversationID       int64      `json:"conversation_id"`
 	SourceConversationID string     `json:"source_conversation_id"` // Gmail Thread ID
 	Subject              string     `json:"subject"`
-	MessageType          string     `json:"message_type,omitempty"`
 	Snippet              string     `json:"snippet"`
 	SentAt               time.Time  `json:"sent_at"`
-	ReceivedAt           *time.Time `json:"received_at,omitempty"`
 	DeletedAt            *time.Time `json:"deleted_at,omitempty"` // When message was deleted from source (nil if not deleted)
 	SizeEstimate         int64      `json:"size_estimate"`
 	HasAttachments       bool       `json:"has_attachments"`
@@ -202,7 +197,6 @@ type MessageFilter struct {
 	RecipientName string // filter by recipient display name (COALESCE(display_name, email))
 	Domain        string // filter by sender domain
 	Label         string // filter by label name
-	MessageType   string // filter by messages.message_type
 
 	// Filter by conversation (thread)
 	ConversationID *int64 // filter by conversation/thread ID

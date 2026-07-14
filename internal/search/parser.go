@@ -25,7 +25,6 @@ type Query struct {
 	LargerThan    *int64     // larger: filter (bytes)
 	SmallerThan   *int64     // smaller: filter (bytes)
 	AccountIDs    []int64    // in: account filter (one or more source IDs)
-	MessageTypes  []string   // message_type filter (e.g. sms, mms, whatsapp, teams)
 	HideDeleted   bool       // exclude messages where deleted_from_source_at IS NOT NULL
 
 	// UnsupportedOperators records recognized Gmail operators that msgvault
@@ -78,8 +77,7 @@ func (q *Query) IsEmpty() bool {
 		q.AfterDate == nil &&
 		q.LargerThan == nil &&
 		q.SmallerThan == nil &&
-		len(q.AccountIDs) == 0 &&
-		len(q.MessageTypes) == 0
+		len(q.AccountIDs) == 0
 }
 
 // operatorFn handles a parsed operator:value pair by applying it to the query.
@@ -259,12 +257,6 @@ var operators = map[string]operatorFn{
 		q.SmallerThan = size
 		return nil
 	},
-	"message_type": func(q *Query, v string, _ time.Time) error {
-		if v = strings.TrimSpace(strings.ToLower(v)); v != "" {
-			q.MessageTypes = append(q.MessageTypes, v)
-		}
-		return nil
-	},
 }
 
 var unsupportedOperators = map[string]bool{
@@ -292,7 +284,6 @@ func NewParser() *Parser {
 //   - before:, after: - date filters (YYYY-MM-DD)
 //   - older_than:, newer_than: - relative date filters (e.g., 7d, 2w, 1m, 1y)
 //   - larger:, smaller: - size filters (e.g., 5M, 100K)
-//   - message_type: or message_type= - message type filter (e.g., sms)
 //   - Bare words and "quoted phrases" - full-text search
 func (p *Parser) Parse(queryStr string) *Query {
 	q := &Query{}
@@ -338,14 +329,10 @@ func Parse(queryStr string) *Query {
 	return NewParser().Parse(queryStr)
 }
 
-// splitOperatorToken recognizes Gmail-style operator:value tokens and the
-// message_type=value form used by HTTP callers that mirror the API parameter.
+// splitOperatorToken recognizes Gmail-style operator:value tokens.
 func splitOperatorToken(token string) (op, value string, ok bool) {
 	if before, after, found := strings.Cut(token, ":"); found {
 		return strings.ToLower(before), after, true
-	}
-	if before, after, found := strings.Cut(token, "="); found && strings.EqualFold(before, "message_type") {
-		return "message_type", after, true
 	}
 	return "", "", false
 }
@@ -490,8 +477,7 @@ func (q *Query) HasOperators() bool {
 		q.BeforeDate != nil ||
 		q.AfterDate != nil ||
 		q.LargerThan != nil ||
-		q.SmallerThan != nil ||
-		len(q.MessageTypes) > 0
+		q.SmallerThan != nil
 }
 
 // parseSize parses size strings like 5M, 100K, 1G into bytes.

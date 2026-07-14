@@ -636,7 +636,6 @@ func TestStoreAttachment_ComputesHashWhenMissing(t *testing.T) {
 		ConversationID:  convID,
 		SourceID:        src.ID,
 		SourceMessageID: "m1",
-		MessageType:     "email",
 	})
 	require.NoError(err, "UpsertMessage")
 
@@ -680,7 +679,6 @@ func TestStoreAttachment_InvalidContentHash_ReturnsError(t *testing.T) {
 		ConversationID:  convID,
 		SourceID:        src.ID,
 		SourceMessageID: "m1",
-		MessageType:     "email",
 	})
 	require.NoError(err, "UpsertMessage")
 
@@ -2198,72 +2196,6 @@ func TestDeriveThreadKey(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestIMAPThreading verifies that IMAP messages sharing an email thread
-// (via References/In-Reply-To headers) are grouped into the same conversation.
-func TestIMAPThreading(t *testing.T) {
-	env := newTestEnv(t)
-	env.SetOptions(t, func(o *Options) {
-		o.SourceType = "imap"
-	})
-
-	// Build three messages in a thread:
-	// msg-root -> msg-reply -> msg-reply2
-	rootMIME := testemail.NewMessage().
-		Subject("Thread root").
-		Header("Message-ID", "<root@example.com>").
-		Body("Root message.").
-		Bytes()
-
-	replyMIME := testemail.NewMessage().
-		Subject("Re: Thread root").
-		Header("Message-ID", "<reply@example.com>").
-		Header("In-Reply-To", "<root@example.com>").
-		Header("References", "<root@example.com>").
-		Body("Reply message.").
-		Bytes()
-
-	reply2MIME := testemail.NewMessage().
-		Subject("Re: Thread root").
-		Header("Message-ID", "<reply2@example.com>").
-		Header("In-Reply-To", "<reply@example.com>").
-		Header("References", "<root@example.com> <reply@example.com>").
-		Body("Second reply.").
-		Bytes()
-
-	// Standalone message (no threading headers except Message-ID)
-	standaloneMIME := testemail.NewMessage().
-		Subject("Unrelated").
-		Header("Message-ID", "<standalone@example.com>").
-		Body("Standalone message.").
-		Bytes()
-
-	env.Mock.Profile.MessagesTotal = 4
-	env.Mock.Profile.HistoryID = 100
-	env.Mock.AddMessage("INBOX|1", rootMIME, []string{"INBOX"})
-	env.Mock.AddMessage("INBOX|2", replyMIME, []string{"INBOX"})
-	env.Mock.AddMessage("INBOX|3", reply2MIME, []string{"INBOX"})
-	env.Mock.AddMessage("INBOX|4", standaloneMIME, []string{"INBOX"})
-
-	summary := runFullSync(t, env)
-	assertSummary(t, summary, WantSummary{Added: new(int64(4))})
-
-	// All three thread messages should share the same conversation
-	// (thread key = References[0] = root@example.com, brackets stripped)
-	assertThreadSourceID(t, env.Store, "INBOX|1", "root@example.com")
-	assertThreadSourceID(t, env.Store, "INBOX|2", "root@example.com")
-	assertThreadSourceID(t, env.Store, "INBOX|3", "root@example.com")
-
-	// Standalone should use its own Message-ID (brackets stripped)
-	assertThreadSourceID(t, env.Store, "INBOX|4", "standalone@example.com")
-
-	// Verify conversation grouping: thread msgs share 1 conversation,
-	// standalone gets its own.
-	var convCount int
-	err := env.Store.DB().QueryRow(`SELECT COUNT(DISTINCT conversation_id) FROM messages`).Scan(&convCount)
-	require.NoError(t, err, "count conversations")
-	assert.Equal(t, 2, convCount, "expected 2 conversations (1 thread + 1 standalone)")
 }
 
 // TestIncrementalSyncLabelRemovedWithMissingRaw verifies that removing a label

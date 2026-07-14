@@ -78,7 +78,6 @@ type jsonMessageDetail struct {
 	Subject              string           `json:"subject"`
 	Snippet              string           `json:"snippet"`
 	SentAt               string           `json:"sent_at,omitempty"`
-	ReceivedAt           *time.Time       `json:"received_at,omitempty"`
 	DeletedFromSourceAt  *time.Time       `json:"deleted_from_source_at,omitempty"`
 	SizeEstimate         int64            `json:"size_estimate"`
 	HasAttachments       bool             `json:"has_attachments"`
@@ -217,7 +216,6 @@ func jsonMessageDetailFrom(msg *query.MessageDetail, maxBodyBytes int) jsonMessa
 		Subject:              msg.Subject,
 		Snippet:              msg.Snippet,
 		SentAt:               jsonTimestamp(msg.SentAt),
-		ReceivedAt:           msg.ReceivedAt,
 		DeletedFromSourceAt:  msg.DeletedAt,
 		SizeEstimate:         msg.SizeEstimate,
 		HasAttachments:       msg.HasAttachments,

@@ -4,20 +4,18 @@
 -- SOURCES & IDENTITY
 -- ============================================================================
 
--- Message sources (accounts from different platforms)
+-- Message sources (Gmail accounts)
 CREATE TABLE IF NOT EXISTS sources (
     id INTEGER PRIMARY KEY,
-    source_type TEXT NOT NULL,  -- 'gmail', 'apple_messages', 'google_messages', 'whatsapp'
-    identifier TEXT NOT NULL,   -- email, phone number, or account ID
+    source_type TEXT NOT NULL CHECK (source_type = 'gmail'),
+    identifier TEXT NOT NULL,   -- Gmail account email
     display_name TEXT,
 
-    -- Gmail-specific (for backward compatibility during transition)
     google_user_id TEXT UNIQUE,
 
     -- Sync state
     last_sync_at DATETIME,
-    sync_cursor TEXT,           -- platform-specific: historyId, rowid, timestamp
-    sync_config JSON,           -- platform-specific sync settings
+    sync_cursor TEXT,           -- Gmail historyId
     oauth_app TEXT,             -- named OAuth app binding (NULL = default)
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -26,16 +24,12 @@ CREATE TABLE IF NOT EXISTS sources (
     UNIQUE(source_type, identifier)
 );
 
--- Participants (unified contacts across platforms)
+-- Participants (Gmail message addresses)
 CREATE TABLE IF NOT EXISTS participants (
     id INTEGER PRIMARY KEY,
-    email_address TEXT,         -- for email participants
-    phone_number TEXT,          -- normalized E.164 format
+    email_address TEXT,
     display_name TEXT,
     domain TEXT,                -- extracted from email for aggregation
-
-    -- For cross-platform dedup (normalized phone/email)
-    canonical_id TEXT,
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -46,7 +40,7 @@ CREATE TABLE IF NOT EXISTS participants (
 -- CONVERSATIONS & MESSAGES
 -- ============================================================================
 
--- Conversations (threads for email, chats for messaging)
+-- Conversations (Gmail threads)
 CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY,
     source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
@@ -54,19 +48,10 @@ CREATE TABLE IF NOT EXISTS conversations (
     -- Platform-specific ID for dedup on re-import
     source_conversation_id TEXT,
 
-    -- Type and metadata
-    conversation_type TEXT NOT NULL,  -- 'email_thread', 'group_chat', 'direct_chat', 'channel'
-    title TEXT,                       -- email subject, group name, or NULL for DMs
+    title TEXT,                       -- email subject
 
     -- Denormalized stats (updated on message insert)
-    participant_count INTEGER DEFAULT 0,
     message_count INTEGER DEFAULT 0,
-    unread_count INTEGER DEFAULT 0,
-    last_message_at DATETIME,
-    last_message_preview TEXT,
-
-    -- Platform-specific metadata
-    metadata JSON,
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +60,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 
 
--- Messages (unified across all platforms)
+-- Messages (Gmail messages)
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -84,37 +69,16 @@ CREATE TABLE IF NOT EXISTS messages (
     -- Platform-specific ID for dedup
     source_message_id TEXT,
 
-    -- RFC822 Message-ID for cross-mailbox dedup (IMAP)
-    rfc822_message_id TEXT,
-
-    -- Message classification
-    message_type TEXT NOT NULL,  -- 'email', 'imessage', 'sms', 'mms', 'rcs', 'whatsapp', 'fbmessenger', 'teams'
-
-    -- Timestamps (sent_at is canonical, others platform-specific)
+    -- Timestamps
     sent_at DATETIME,
-    received_at DATETIME,
-    read_at DATETIME,
-    delivered_at DATETIME,
     internal_date DATETIME,      -- Gmail internal date
 
     -- Sender
     sender_id INTEGER REFERENCES participants(id),
-    is_from_me BOOLEAN DEFAULT FALSE,
 
     -- Content
-    subject TEXT,               -- email subject, NULL for chat
+    subject TEXT,
     snippet TEXT,               -- preview/excerpt
-
-    -- Threading (for email and replies)
-    reply_to_message_id INTEGER REFERENCES messages(id),
-    thread_position INTEGER,    -- position in thread/conversation
-
-    -- Status flags
-    is_read BOOLEAN DEFAULT TRUE,
-    is_delivered BOOLEAN,
-    is_sent BOOLEAN DEFAULT TRUE,
-    is_edited BOOLEAN DEFAULT FALSE,
-    is_forwarded BOOLEAN DEFAULT FALSE,
 
     -- Size and attachment tracking
     size_estimate INTEGER,
@@ -126,21 +90,17 @@ CREATE TABLE IF NOT EXISTS messages (
 
     -- Archival info
     archived_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    indexing_version INTEGER DEFAULT 1,
-
-    -- Platform-specific metadata
-    metadata JSON,
 
     UNIQUE(source_id, source_message_id)
 );
 
--- Message recipients (To/Cc/Bcc for email, participants for group messages)
+-- Message recipients (From/To/Cc/Bcc for email)
 CREATE TABLE IF NOT EXISTS message_recipients (
     id INTEGER PRIMARY KEY,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
 
-    recipient_type TEXT NOT NULL,  -- 'to', 'cc', 'bcc', 'mention'
+    recipient_type TEXT NOT NULL CHECK (recipient_type IN ('from', 'to', 'cc', 'bcc')),
     display_name TEXT,             -- as it appeared in the message
 
     UNIQUE(message_id, participant_id, recipient_type)
@@ -165,22 +125,7 @@ CREATE TABLE IF NOT EXISTS attachments (
     content_hash TEXT,              -- SHA-256 of content
     storage_path TEXT NOT NULL,     -- relative path: ab/abcd1234...
 
-    -- Media metadata
-    media_type TEXT,                -- 'image', 'video', 'audio', 'document', 'sticker', 'gif', 'voice_note'
-    width INTEGER,
-    height INTEGER,
-    duration_ms INTEGER,            -- for audio/video
-
-    -- Thumbnail (for images/videos)
-    thumbnail_hash TEXT,
-    thumbnail_path TEXT,
-
-    -- Platform-specific
-    source_attachment_id TEXT,      -- original ID from platform
-    attachment_metadata JSON,       -- EXIF, etc.
-
-    -- Encryption
-    encryption_version INTEGER DEFAULT 0,
+    source_attachment_id TEXT,      -- Gmail attachment ID
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -197,7 +142,6 @@ CREATE TABLE IF NOT EXISTS labels (
     source_label_id TEXT,           -- Gmail label ID
     name TEXT NOT NULL,
     label_type TEXT,                -- 'system', 'user', 'auto'
-    color TEXT,
 
     UNIQUE(source_id, name)
 );
@@ -226,10 +170,9 @@ CREATE TABLE IF NOT EXISTS message_raw (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
 
     raw_data BLOB NOT NULL,
-    raw_format TEXT NOT NULL,       -- 'mime', 'imessage_archive', 'whatsapp_json', 'rcs_json'
+    raw_format TEXT NOT NULL,       -- 'mime'
 
-    compression TEXT DEFAULT 'zlib',
-    encryption_version INTEGER DEFAULT 0
+    compression TEXT DEFAULT 'zlib'
 );
 
 -- ============================================================================
@@ -292,25 +235,16 @@ CREATE INDEX IF NOT EXISTS idx_sources_type ON sources(source_type);
 -- Participants
 CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_email ON participants(email_address)
     WHERE email_address IS NOT NULL;
--- idx_participants_phone is created (and upgraded from the legacy
--- non-unique form) in Go by Store.ensureParticipantsPhoneUniqueIndex
--- so existing DBs whose IF NOT EXISTS no-op'd the schema bump still
--- end up with a UNIQUE partial index.
-CREATE INDEX IF NOT EXISTS idx_participants_canonical ON participants(canonical_id)
-    WHERE canonical_id IS NOT NULL;
 
 
 -- Conversations
 CREATE INDEX IF NOT EXISTS idx_conversations_source ON conversations(source_id);
-CREATE INDEX IF NOT EXISTS idx_conversations_last_message ON conversations(last_message_at DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_type ON conversations(conversation_type);
 
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, sent_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(source_id, deleted_from_source_at);
 CREATE INDEX IF NOT EXISTS idx_messages_source_message_id ON messages(source_message_id);
 
@@ -335,9 +269,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_msg_content_hash
     WHERE content_hash IS NOT NULL AND content_hash != '';
 CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(content_hash);
 CREATE INDEX IF NOT EXISTS idx_attachments_storage_path ON attachments(storage_path);
--- The partial unique index on (message_id, content_hash) for
--- UpsertAttachment idempotency is created in Go (Store.InitSchema)
--- after a one-shot dedupe of legacy duplicate rows.
 
 -- Labels
 CREATE INDEX IF NOT EXISTS idx_labels_source ON labels(source_id);
@@ -347,9 +278,5 @@ CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
 CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sync_run_items_run_status
     ON sync_run_items(sync_run_id, status, created_at DESC);
-
--- ============================================================================
--- ACCOUNT IDENTITIES
--- ============================================================================
 
 PRAGMA user_version = 1;

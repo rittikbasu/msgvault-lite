@@ -546,28 +546,25 @@ func (s *Store) InitSchema() error {
 	}
 
 	// Migrations: add columns for databases created before these features.
-	// The dialect determines the list. Both backends return ADD COLUMN
-	// migrations for DBs created before later columns were introduced:
-	// SQLite emits ALTER TABLE ADD COLUMN, PostgreSQL emits the equivalent
-	// ALTER TABLE ADD COLUMN IF NOT EXISTS list (including search_fts).
-	//
-	// lastModifiedColumnAdded tracks whether the last_modified ALTER
-	// actually fired, which forces the last_modified backfill below even if
-	// its ledger sentinel is present: a just-added column holds NULLs that
-	// must be stamped. Only SQLite can signal this — its ALTER errors with
-	// a duplicate-column error when the column exists, while PostgreSQL's
-	// IF NOT EXISTS form always succeeds; PG never needs the forced path
-	// because its ADD COLUMN carries DEFAULT CURRENT_TIMESTAMP, which
-	// backfills existing rows in the same statement.
-	lastModifiedColumnAdded := false
 	for _, m := range s.dialect.LegacyColumnMigrations() {
 		if _, err := s.db.Exec(m.SQL); err != nil {
 			if !s.dialect.IsDuplicateColumnError(err) {
 				return fmt.Errorf("migrate schema (%s): %w", m.Desc, err)
 			}
-		} else if m.Desc == "last_modified" {
-			lastModifiedColumnAdded = true
 		}
+	}
+
+	// Existing archives may still carry vector-era triggers. Keep their
+	// physical last_modified column, but remove the write amplification.
+	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
+		_, err := tx.ExecContext(ctx, `
+			DROP TRIGGER IF EXISTS trg_messages_last_modified;
+			DROP TRIGGER IF EXISTS trg_message_bodies_last_modified_upd;
+			DROP TRIGGER IF EXISTS trg_message_bodies_last_modified_ins;
+		`)
+		return err
+	}); err != nil {
+		return fmt.Errorf("drop retired vector triggers: %w", err)
 	}
 
 	// Partial covering index for the ListMessages page (GET /api/v1/messages).
@@ -611,28 +608,6 @@ func (s *Store) InitSchema() error {
 		return err
 	}); err != nil {
 		return fmt.Errorf("create deletion timestamp indexes: %w", err)
-	}
-
-	// Backfill last_modified for rows that predate the column. SQLite cannot
-	// ADD COLUMN with a non-constant default, so the legacy migration leaves
-	// existing rows NULL. The migration ledger avoids repeating this full-table
-	// scan after the first successful run.
-	lastModifiedMigrated, err := s.IsMigrationApplied(migrationMessagesLastModifiedBackfill)
-	if err != nil {
-		return err
-	}
-	if !lastModifiedMigrated || lastModifiedColumnAdded {
-		if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-			_, err := tx.ExecContext(ctx,
-				`UPDATE messages SET last_modified = `+s.dialect.Now()+
-					` WHERE last_modified IS NULL`)
-			return err
-		}); err != nil {
-			return fmt.Errorf("backfill last_modified: %w", err)
-		}
-		if err := s.MarkMigrationApplied(migrationMessagesLastModifiedBackfill); err != nil {
-			return err
-		}
 	}
 
 	// Remove an obsolete embedding index from archives that previously created

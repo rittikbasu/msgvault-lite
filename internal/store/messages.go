@@ -1147,9 +1147,7 @@ func (s *Store) BackfillFTS(progress func(done, total int64)) (int64, error) {
 		return 0, nil
 	}
 
-	// runMaintenance disables the pool-wide 30s statement_timeout for the
-	// clear: FTSClearSQL is a full-table tsvector rewrite that exceeds 30s on
-	// a large archive (finding S1). No-op timeout reset on SQLite.
+	// Use the maintenance transaction for the full-index clear.
 	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
 		_, err := tx.ExecContext(ctx, s.dialect.FTSClearSQL())
 		return err

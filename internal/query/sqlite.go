@@ -50,16 +50,7 @@ func (e *SQLiteEngine) hasFTSTable(ctx context.Context) bool {
 		return e.ftsResult
 	}
 
-	// The dialect's HasFTSTableSQL() probe is the existence check for BOTH
-	// backends: SQLite checks sqlite_master for the messages_fts virtual
-	// table; PostgreSQL checks information_schema for the messages.search_fts
-	// column. We must NOT run a hardcoded SQLite-only `SELECT 1 FROM
-	// messages_fts` secondary probe unconditionally — on PostgreSQL there is
-	// no messages_fts relation (PG uses an inline search_fts TSVECTOR column),
-	// so that probe errors with `relation "messages_fts" does not exist`
-	// (42P01), causing FTS to be cached as unavailable and PG Search to
-	// silently fall back to subject/snippet LIKE instead of the tsvector
-	// ranking path.
+	// HasFTSTableSQL checks sqlite_master for the messages_fts virtual table.
 	var count int
 	err := e.queryRowContext(ctx, e.dialect.HasFTSTableSQL()).Scan(&count)
 	if err != nil {
@@ -79,7 +70,6 @@ func (e *SQLiteEngine) hasFTSTable(ctx context.Context) bool {
 	// opened by a no-fts5 binary, but querying it fails with
 	// `no such module: fts5`. Run the dialect's liveness SQL to confirm the
 	// table is actually queryable, mirroring store.SQLiteDialect.FTSAvailable.
-	// PostgreSQL returns "" here (its column probe is authoritative).
 	if liveness := e.dialect.FTSLivenessSQL(); liveness != "" {
 		var probe int
 		lerr := e.queryRowContext(ctx, liveness).Scan(&probe)

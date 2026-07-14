@@ -258,14 +258,6 @@ func (d *SQLiteDialect) LegacyColumnMigrations() []ColumnMigration {
 		// Retain the retired embedding watermark on upgraded archives so schema
 		// compatibility does not require a destructive table rewrite.
 		{`ALTER TABLE messages ADD COLUMN embed_gen INTEGER`, "embed_gen"},
-		// SQLite rejects a non-constant
-		// DEFAULT in ADD COLUMN ("Cannot add a column with non-constant
-		// default"), so the column is added with no default (existing rows
-		// get NULL) and InitSchema's backfillLastModified follows up with a
-		// one-shot `UPDATE ... SET last_modified = CURRENT_TIMESTAMP WHERE
-		// last_modified IS NULL`. Fresh DBs keep the
-		// CREATE TABLE default in schema.sql, which IS allowed.
-		{`ALTER TABLE messages ADD COLUMN last_modified DATETIME`, "last_modified"},
 	}
 }
 

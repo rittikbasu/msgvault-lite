@@ -1131,10 +1131,8 @@ zstd_level = 20
 	}
 }
 
-// TestLoadExpandsBackupRepoTilde pins the fix adding [backup] repo to the
-// same tilde-expansion pass every other configured path gets (mirrors
-// TestLoadExpandsVectorDBPath). Before the fix, repo = "~/backups" stayed
-// literal instead of resolving to the user's home directory.
+// TestLoadExpandsBackupRepoTilde verifies that repo = "~/backups" resolves
+// against the user's home directory.
 func TestLoadExpandsBackupRepoTilde(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -1158,11 +1156,8 @@ repo = "~/backups"
 	assert.Equal(expected, cfg.Backup.Repo)
 }
 
-// TestLoadResolvesRelativeBackupRepo pins the fix adding [backup] repo to
-// the same explicit-config resolveRelative pass every other configured path
-// gets (mirrors TestLoadResolvesRelativeVectorDBPath). Before the fix,
-// repo = "backups" resolved against the process's working directory instead
-// of the config file's directory.
+// TestLoadResolvesRelativeBackupRepo verifies that repo = "backups" resolves
+// against the config file's directory, not the process working directory.
 func TestLoadResolvesRelativeBackupRepo(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)

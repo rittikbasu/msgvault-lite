@@ -23,12 +23,10 @@ type ColumnMigration struct {
 	Desc string // short label for error messages
 }
 
-// Dialect abstracts database-specific SQL generation and behavior.
-// Implementations exist for SQLite (default) and PostgreSQL (opt-in).
+// Dialect centralizes SQL generation and storage behavior.
 type Dialect interface {
 
-	// Rebind converts a query with ? placeholders to the appropriate format
-	// for the database driver. No-op for SQLite; converts to $1, $2, ... for PostgreSQL.
+	// Rebind adapts ? placeholders for the database driver.
 	Rebind(query string) string
 
 	// Now returns the SQL expression for the current timestamp.

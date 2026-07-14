@@ -240,10 +240,6 @@ func (s *Syncer) processBatch(ctx context.Context, syncID, sourceID int64, listR
 			threadID := threadIDs[newIDs[i]]
 			err := s.ingestMessage(sourceID, raw, threadID, labelMap)
 			if err != nil {
-				if errors.Is(err, errDuplicateRFC822) {
-					result.skipped++
-					continue
-				}
 				s.logger.Warn("failed to ingest message", "id", raw.ID, "error", err)
 				s.recordSyncItem(syncID, newIDs[i], syncItemPhaseIngest, store.SyncRunItemStatusError, syncItemKindIngestError, err)
 				checkpoint.ErrorsCount++
@@ -696,50 +692,11 @@ func (s *Syncer) persistMessage(data *messageData, labelMap map[string]int64) (i
 	return messageID, nil
 }
 
-// errDuplicateRFC822 signals that a message was skipped because
-// another message with the same RFC822 Message-ID already exists
-// for this source. Used for cross-sync dedup on IMAP where
-// composite IDs change when messages move between mailboxes.
-var errDuplicateRFC822 = errors.New("duplicate RFC822 Message-ID")
-
-// ingestMessage parses and stores a single message. Returns
-// errDuplicateRFC822 for IMAP deduplication skips.
+// ingestMessage parses and stores a single Gmail message.
 func (s *Syncer) ingestMessage(sourceID int64, raw *gmail.RawMessage, threadID string, labelMap map[string]int64) error {
 	data, err := s.parseToModel(sourceID, raw, threadID)
 	if err != nil {
 		return err
-	}
-
-	// For IMAP sources, check if a message with the same RFC822
-	// Message-ID already exists under a different composite ID.
-	// This handles messages that moved between mailboxes across
-	// syncs (e.g. All Mail → Trash changes the mailbox|uid key).
-	// When matched, update the existing row's composite ID and
-	// labels so future syncs skip it at the ID-filtering stage
-	// instead of re-downloading the MIME body each time.
-	if s.opts.SourceType == "imap" &&
-		data.message.RFC822MessageID.Valid {
-		existingID, err := s.store.GetMessageIDByRFC822ID(
-			sourceID, data.message.RFC822MessageID.String)
-		if err != nil {
-			return fmt.Errorf("check rfc822 dedup: %w", err)
-		}
-		if existingID > 0 {
-			var labelIDs []int64
-			for _, lbl := range data.gmailLabelIDs {
-				if id, ok := labelMap[lbl]; ok {
-					labelIDs = append(labelIDs, id)
-				}
-			}
-			if err := s.store.UpdateMessageOnDedup(
-				existingID,
-				data.message.SourceMessageID,
-				labelIDs,
-			); err != nil {
-				return fmt.Errorf("update dedup message: %w", err)
-			}
-			return errDuplicateRFC822
-		}
 	}
 
 	_, err = s.persistMessage(data, labelMap)

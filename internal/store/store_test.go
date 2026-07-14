@@ -25,7 +25,7 @@ func TestStore_Open(t *testing.T) {
 
 func TestStoreRejectsDatabaseURLs(t *testing.T) {
 	for _, dbURL := range []string{
-		"postgres://user:sensitive-password@example.com/msgvault",
+		"postgres://user:***@example.com/msgvault",
 		"postgresql://user@example.com/msgvault",
 		"mysql://user@example.com/msgvault",
 	} {
@@ -115,63 +115,6 @@ func TestStore_ListSources(t *testing.T) {
 	assert.Equal(f.Source.ID, sources[0].ID, "ID")
 }
 
-func TestStore_SourceImportItems(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	f := storetest.New(t)
-	src, err := f.Store.GetOrCreateSource("synctech_sms", "+15550000001")
-	require.NoError(err, "GetOrCreateSource")
-
-	item := store.SourceImportItem{
-		SourceID:   src.ID,
-		Provider:   "drive",
-		ProviderID: "drive-file-1",
-		Name:       "sms-2024.xml",
-		Checksum:   "abc123",
-		Size:       42,
-		Status:     "imported",
-	}
-	require.NoError(f.Store.UpsertSourceImportItem(item), "UpsertSourceImportItem")
-
-	got, err := f.Store.GetSourceImportItem(src.ID, "drive", "drive-file-1")
-	require.NoError(err, "GetSourceImportItem")
-	require.NotNil(got, "GetSourceImportItem returned nil")
-	assert.Equal("sms-2024.xml", got.Name, "Name")
-	assert.Equal("abc123", got.Checksum, "Checksum")
-	assert.Equal("imported", got.Status, "Status")
-
-	item.Size = 99
-	item.Status = "failed"
-	item.ErrorMessage = sql.NullString{String: "boom", Valid: true}
-	require.NoError(f.Store.UpsertSourceImportItem(item), "UpsertSourceImportItem update")
-	got, err = f.Store.GetSourceImportItem(src.ID, "drive", "drive-file-1")
-	require.NoError(err, "GetSourceImportItem after update")
-	assert.Equal(int64(99), got.Size, "updated Size")
-	assert.Equal("failed", got.Status, "updated Status")
-	assert.Equal("boom", got.ErrorMessage.String, "ErrorMessage")
-
-	checksums, err := f.Store.ListImportedSourceItemChecksums(src.ID, "drive")
-	require.NoError(err, "ListImportedSourceItemChecksums")
-	assert.Empty(checksums["drive-file-1"], "failed item should not be returned as imported")
-	item.Status = "imported"
-	require.NoError(f.Store.UpsertSourceImportItem(item), "UpsertSourceImportItem imported")
-	checksums, err = f.Store.ListImportedSourceItemChecksums(src.ID, "drive")
-	require.NoError(err, "ListImportedSourceItemChecksums imported")
-	assert.Equal("abc123", checksums["drive-file-1"], "imported checksum")
-
-	_, err = f.Store.DB().Exec(
-		f.Store.Rebind(`UPDATE source_import_items SET checksum = NULL WHERE source_id = ? AND provider = ? AND provider_id = ?`),
-		src.ID, "drive", "drive-file-1",
-	)
-	require.NoError(err, "set checksum NULL")
-	got, err = f.Store.GetSourceImportItem(src.ID, "drive", "drive-file-1")
-	require.NoError(err, "GetSourceImportItem with NULL checksum")
-	assert.Empty(got.Checksum, "NULL checksum should surface as empty string")
-	checksums, err = f.Store.ListImportedSourceItemChecksums(src.ID, "drive")
-	require.NoError(err, "ListImportedSourceItemChecksums with NULL checksum")
-	assert.Empty(checksums["drive-file-1"], "NULL imported checksum should surface as empty string")
-}
-
 func TestStore_Conversation(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -188,17 +131,6 @@ func TestStore_Conversation(t *testing.T) {
 	require.NoError(err, "EnsureConversation() second call")
 
 	assert.Equal(convID, convID2, "second call ID")
-}
-
-func TestStore_EnsureParticipantByIdentifierAllowsShortCode(t *testing.T) {
-	require := require.New(t)
-	f := storetest.New(t)
-	id, err := f.Store.EnsureParticipantByIdentifier("synctech_sms", "12345", "Bank alerts")
-	require.NoError(err, "EnsureParticipantByIdentifier")
-	require.NotZero(id, "participant id is zero")
-	id2, err := f.Store.EnsureParticipantByIdentifier("synctech_sms", "12345", "Bank alerts")
-	require.NoError(err, "EnsureParticipantByIdentifier second")
-	assert.Equal(t, id, id2, "id2")
 }
 
 func TestStore_UpsertMessage(t *testing.T) {

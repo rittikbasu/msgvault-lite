@@ -47,8 +47,7 @@ const defaultSQLiteParams = "?_journal_mode=WAL&_busy_timeout=30000&_synchronous
 // type-asserts to the specific driver error type using errors.As.
 // Handles both value (sqlite3.Error) and pointer (*sqlite3.Error) forms.
 //
-// SQLiteDialect's error predicates are thin wrappers around this helper; it also
-// services subset.go (which has not been migrated to Dialect).
+// SQLiteDialect's error predicates are thin wrappers around this helper.
 func isSQLiteError(err error, substr string) bool {
 	var sqliteErr sqlite3.Error
 	if errors.As(err, &sqliteErr) {
@@ -464,19 +463,15 @@ func (s *Store) IsBusyError(err error) bool {
 	return s.dialect.IsBusyError(err)
 }
 
-// SchemaStale checks whether the database schema is missing columns
-// added by recent migrations. Returns (stale, column, err). Only
-// reports stale when the query succeeds and the column is absent;
-// query errors are returned separately so callers don't misdiagnose
-// corruption or permission problems as outdated schema.
+// SchemaStale checks whether the database uses the current fork schema.
 func (s *Store) SchemaStale() (bool, string, error) {
 	var count int
 	err := s.db.QueryRow(s.dialect.SchemaStaleCheck()).Scan(&count)
 	if err != nil {
 		return false, "", fmt.Errorf("check schema version: %w", err)
 	}
-	if count == 0 {
-		return true, "messages.embed_gen", nil
+	if count != 1 {
+		return true, "schema version", nil
 	}
 	return false, "", nil
 }
@@ -533,40 +528,6 @@ func (s *Store) InitSchema() error {
 		}
 	}
 
-	// Legacy databases may have idx_participants_phone as a non-unique
-	// partial index (it was created that way before the schema flipped
-	// to UNIQUE). `CREATE UNIQUE INDEX IF NOT EXISTS` in schema.sql
-	// silently leaves the non-unique index in place, so
-	// EnsureParticipantByPhone's ON CONFLICT (phone_number) finds no
-	// matching unique constraint on upgraded DBs. Run a one-shot
-	// migration that dedupes phone rows, drops the index, and
-	// recreates it as UNIQUE.
-	if err := s.ensureParticipantsPhoneUniqueIndex(); err != nil {
-		return fmt.Errorf("ensure idx_participants_phone unique: %w", err)
-	}
-
-	// Migrations: add columns for databases created before these features.
-	for _, m := range s.dialect.LegacyColumnMigrations() {
-		if _, err := s.db.Exec(m.SQL); err != nil {
-			if !s.dialect.IsDuplicateColumnError(err) {
-				return fmt.Errorf("migrate schema (%s): %w", m.Desc, err)
-			}
-		}
-	}
-
-	// Existing archives may still carry vector-era triggers. Keep their
-	// physical last_modified column, but remove the write amplification.
-	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		_, err := tx.ExecContext(ctx, `
-			DROP TRIGGER IF EXISTS trg_messages_last_modified;
-			DROP TRIGGER IF EXISTS trg_message_bodies_last_modified_upd;
-			DROP TRIGGER IF EXISTS trg_message_bodies_last_modified_ins;
-		`)
-		return err
-	}); err != nil {
-		return fmt.Errorf("drop retired vector triggers: %w", err)
-	}
-
 	// Partial covering index for the ListMessages page (GET /api/v1/messages).
 	// That query counts and paginates live messages ordered by
 	// COALESCE(sent_at, received_at, internal_date) DESC, id DESC. Without an
@@ -577,8 +538,6 @@ func (s *Store) InitSchema() error {
 	// index and lets the page query walk it in order and stop at LIMIT,
 	// eliminating both the full scan and the sort (~29x faster COUNT, no sort).
 	//
-	// Runs after the legacy ADD COLUMN loop so deleted_at and
-	// deleted_from_source_at exist on upgraded databases.
 	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
 		_, err := tx.ExecContext(ctx, `
 			CREATE INDEX IF NOT EXISTS idx_messages_live_sent_at
@@ -610,16 +569,6 @@ func (s *Store) InitSchema() error {
 		return fmt.Errorf("create deletion timestamp indexes: %w", err)
 	}
 
-	// Remove an obsolete embedding index from archives that previously created
-	// it. The compatibility column itself remains untouched.
-	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		_, err := tx.ExecContext(ctx,
-			`DROP INDEX IF EXISTS idx_messages_embed_gen`)
-		return err
-	}); err != nil {
-		return fmt.Errorf("drop idx_messages_embed_gen: %w", err)
-	}
-
 	// Load the optional FTS schema.
 	if ftsFile := s.dialect.SchemaFTS(); ftsFile != "" {
 		ftsSchema, err := schemaFS.ReadFile(ftsFile)
@@ -638,11 +587,6 @@ func (s *Store) InitSchema() error {
 	// Probe availability through the dialect so it works uniformly for
 	// backends that carry FTS inside their main schema.
 	s.fts5Available = s.dialect.FTSAvailable(s.db.DB)
-
-	// Ensure the default "All" collection exists and contains every source.
-	if err := s.EnsureDefaultCollection(); err != nil {
-		return fmt.Errorf("ensure default collection: %w", err)
-	}
 
 	return nil
 }

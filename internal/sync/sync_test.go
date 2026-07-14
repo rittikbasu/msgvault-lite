@@ -2266,59 +2266,6 @@ func TestIMAPThreading(t *testing.T) {
 	assert.Equal(t, 2, convCount, "expected 2 conversations (1 thread + 1 standalone)")
 }
 
-// TestIMAPCrossSyncDedup verifies that a message imported from one mailbox
-// is not re-imported when it appears under a different mailbox|uid on a
-// subsequent sync (e.g. moved from All Mail to Trash).
-func TestIMAPCrossSyncDedup(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	env := newTestEnv(t)
-	env.SetOptions(t, func(o *Options) {
-		o.SourceType = "imap"
-	})
-
-	msg := testemail.NewMessage().
-		Subject("Dedup test").
-		Header("Message-ID", "<dedup@example.com>").
-		Body("Same message, different mailbox.").
-		Bytes()
-
-	// First sync: message is in INBOX
-	env.Mock.Profile.MessagesTotal = 1
-	env.Mock.Profile.HistoryID = 100
-	env.Mock.AddMessage("INBOX|42", msg, []string{"INBOX"})
-	summary := runFullSync(t, env)
-	assertSummary(t, summary, WantSummary{Added: new(int64(1))})
-	assertMessageHasLabel(t, env.Store, "INBOX|42", "INBOX")
-
-	// Second sync: message moved to Trash (different composite ID)
-	delete(env.Mock.Messages, "INBOX|42")
-	env.Mock.AddMessage("TRASH|99", msg, []string{"TRASH"})
-	summary = runFullSync(t, env)
-	// Should be skipped via RFC822 Message-ID dedup, not re-imported
-	assertSummary(t, summary, WantSummary{Added: new(int64(0))})
-
-	// Only one message should exist in the database
-	var count int
-	err := env.Store.DB().QueryRow(
-		`SELECT COUNT(*) FROM messages`).Scan(&count)
-	require.NoError(err, "count messages")
-	assert.Equal(1, count, "expected 1 message (duplicate imported)")
-
-	// The existing row's source_message_id should be updated to the
-	// new composite ID so future syncs don't re-download the message.
-	var srcMsgID string
-	err = env.Store.DB().QueryRow(
-		`SELECT source_message_id FROM messages LIMIT 1`,
-	).Scan(&srcMsgID)
-	require.NoError(err, "get source_message_id")
-	assert.Equal("TRASH|99", srcMsgID, "source_message_id not updated")
-
-	// Labels should reflect the new mailbox.
-	assertMessageHasLabel(t, env.Store, "TRASH|99", "TRASH")
-	assertMessageNotHasLabel(t, env.Store, "TRASH|99", "INBOX")
-}
-
 // TestIncrementalSyncLabelRemovedWithMissingRaw verifies that removing a label
 // from a message whose raw MIME data is missing still succeeds. The label-removal
 // path operates on the message_labels table directly and never touches raw data.

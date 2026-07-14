@@ -69,25 +69,3 @@ func TestStore_StatsSourceDeletedBreakdown(t *testing.T) {
 	assert.Equal(stats.MessageCount, activeCount, "CountActiveMessages matches stats")
 	assert.Equal(stats.SourceDeletedCount, deletedCount, "CountSourceDeletedMessages matches stats")
 }
-
-// TestStore_CollectionSourceDeletedCount asserts the collection aggregate
-// carries the same active/source-deleted split as global stats.
-func TestStore_CollectionSourceDeletedCount(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-	f := storetest.New(t)
-
-	f.CreateMessages(4)
-	del := f.CreateMessage("coll-src-del-1")
-	setDeletedFromSource(f, del)
-
-	_, err := f.Store.CreateCollection("team", "", []int64{f.Source.ID})
-	require.NoError(err, "CreateCollection")
-
-	coll, err := f.Store.GetCollectionByName("team")
-	require.NoError(err, "GetCollectionByName")
-	require.NotNil(coll, "collection")
-
-	assert.Equal(int64(4), coll.MessageCount, "collection active count")
-	assert.Equal(int64(1), coll.SourceDeletedCount, "collection source-deleted count")
-}

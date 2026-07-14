@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 )
 
@@ -23,10 +22,6 @@ const (
 // exists. Wrapped via fmt.Errorf so callers can use errors.Is to tell
 // absence apart from real DB errors.
 var ErrSyncRunNotFound = errors.New("sync run not found")
-
-// ErrSourceImportItemNotFound is returned by GetSourceImportItem when no
-// import-item row matches. Wrapped via fmt.Errorf for errors.Is checks.
-var ErrSourceImportItemNotFound = errors.New("source import item not found")
 
 // dbTimeLayouts lists formats used by SQLite/go-sqlite3 for timestamp storage.
 // This matches the full set from SQLiteTimestampFormats in mattn/go-sqlite3,
@@ -161,21 +156,6 @@ type SyncRunItem struct {
 	ErrorKind       string
 	ErrorMessage    string
 	CreatedAt       time.Time
-}
-
-type SourceImportItem struct {
-	ID              int64
-	SourceID        int64
-	Provider        string
-	ProviderID      string
-	Name            string
-	Checksum        string
-	Size            int64
-	ModifiedAt      sql.NullTime
-	ImportedAt      sql.NullTime
-	Status          string
-	RecordsImported int
-	ErrorMessage    sql.NullString
 }
 
 // StartSync creates a new sync run record and returns its ID. The
@@ -531,80 +511,6 @@ func (s *Store) GetLatestCheckpointedSync(sourceID int64) (*SyncRun, error) {
 	return run, err
 }
 
-func (s *Store) UpsertSourceImportItem(item SourceImportItem) error {
-	_, err := s.db.Exec(fmt.Sprintf(`
-		INSERT INTO source_import_items (
-			source_id, provider, provider_id, name, checksum, size, modified_at,
-			imported_at, status, records_imported, error_message, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s, %s)
-		ON CONFLICT(source_id, provider, provider_id) DO UPDATE SET
-			name = excluded.name,
-			checksum = excluded.checksum,
-			size = excluded.size,
-			modified_at = excluded.modified_at,
-			imported_at = excluded.imported_at,
-			status = excluded.status,
-			records_imported = excluded.records_imported,
-			error_message = excluded.error_message,
-			updated_at = %s
-	`, s.dialect.Now(), s.dialect.Now(), s.dialect.Now()),
-		item.SourceID, item.Provider, item.ProviderID, item.Name, item.Checksum,
-		item.Size, item.ModifiedAt, item.ImportedAt, item.Status,
-		item.RecordsImported, item.ErrorMessage)
-	if err != nil {
-		return fmt.Errorf("upsert source import item: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) GetSourceImportItem(sourceID int64, provider, providerID string) (*SourceImportItem, error) {
-	var item SourceImportItem
-	var checksum sql.NullString
-	err := s.db.QueryRow(`
-		SELECT id, source_id, provider, provider_id, name, checksum, size,
-		       modified_at, imported_at, status, records_imported, error_message
-		FROM source_import_items
-		WHERE source_id = ? AND provider = ? AND provider_id = ?
-	`, sourceID, provider, providerID).Scan(
-		&item.ID, &item.SourceID, &item.Provider, &item.ProviderID, &item.Name,
-		&checksum, &item.Size, &item.ModifiedAt, &item.ImportedAt,
-		&item.Status, &item.RecordsImported, &item.ErrorMessage,
-	)
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("source import item %s/%s for source %d: %w", provider, providerID, sourceID, ErrSourceImportItemNotFound)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get source import item: %w", err)
-	}
-	item.Checksum = checksum.String
-	return &item, nil
-}
-
-func (s *Store) ListImportedSourceItemChecksums(sourceID int64, provider string) (map[string]string, error) {
-	rows, err := s.db.Query(`
-		SELECT provider_id, checksum
-		FROM source_import_items
-		WHERE source_id = ? AND provider = ? AND status = 'imported'
-	`, sourceID, provider)
-	if err != nil {
-		return nil, fmt.Errorf("list imported source import items: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	out := map[string]string{}
-	for rows.Next() {
-		var providerID string
-		var checksum sql.NullString
-		if err := rows.Scan(&providerID, &checksum); err != nil {
-			return nil, fmt.Errorf("scan source import item checksum: %w", err)
-		}
-		out[providerID] = checksum.String
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate source import item checksums: %w", err)
-	}
-	return out, nil
-}
-
 // HasAnyActiveSync returns true if any source currently has a running sync.
 // Use this as a safety gate before performing destructive file operations that
 // could race with concurrent attachment ingestion.
@@ -673,30 +579,6 @@ func (s *Store) GetOrCreateSource(sourceType, identifier string) (*Source, error
 	source, err := scanSource(row)
 	if err != nil {
 		return nil, fmt.Errorf("upsert source: %w", err)
-	}
-
-	// Add to the default "All" collection if it exists.
-	//
-	// This runs as a separate Exec rather than inside a transaction
-	// with the source insert. If this Exec fails, the source row is
-	// committed but the All membership is missing — and the next
-	// EnsureDefaultCollection call (which runs in InitSchema on every
-	// process launch) re-adds every source not yet linked. Self-heals
-	// on next CLI invocation; until then collection-scoped reads of
-	// All would miss this source. Acceptable for a single-user tool;
-	// a future refactor can fold this into a withTx.
-	if _, err := s.db.Exec(
-		s.dialect.InsertOrIgnore(
-			`INSERT OR IGNORE INTO collection_sources (collection_id, source_id)
-			 SELECT id, ? FROM collections WHERE name = ?`,
-		),
-		source.ID, DefaultCollectionName,
-	); err != nil {
-		slog.Warn("failed to add source to default collection (self-heals on next InitSchema)",
-			"source_id", source.ID,
-			"identifier", identifier,
-			"error", err,
-		)
 	}
 
 	return source, nil

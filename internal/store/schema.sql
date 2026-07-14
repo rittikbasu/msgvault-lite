@@ -1,5 +1,4 @@
--- msgvault unified schema
--- Supports: Gmail, Apple Messages, Google Messages, WhatsApp
+-- msgvault-lite Gmail archive schema
 
 -- ============================================================================
 -- SOURCES & IDENTITY
@@ -42,19 +41,6 @@ CREATE TABLE IF NOT EXISTS participants (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Participant identifiers (for linking multiple contact methods)
-CREATE TABLE IF NOT EXISTS participant_identifiers (
-    id INTEGER PRIMARY KEY,
-    participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
-
-    identifier_type TEXT NOT NULL,  -- 'email', 'phone', 'apple_id', 'whatsapp'
-    identifier_value TEXT NOT NULL, -- normalized value
-    display_value TEXT,             -- original format for display
-
-    is_primary BOOLEAN DEFAULT FALSE,
-
-    UNIQUE(identifier_type, identifier_value)
-);
 
 -- ============================================================================
 -- CONVERSATIONS & MESSAGES
@@ -88,17 +74,6 @@ CREATE TABLE IF NOT EXISTS conversations (
     UNIQUE(source_id, source_conversation_id)
 );
 
--- Conversation participants (who's in each conversation)
-CREATE TABLE IF NOT EXISTS conversation_participants (
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
-
-    role TEXT DEFAULT 'member',  -- 'owner', 'admin', 'member' for groups
-    joined_at DATETIME,
-    left_at DATETIME,
-
-    PRIMARY KEY (conversation_id, participant_id)
-);
 
 -- Messages (unified across all platforms)
 CREATE TABLE IF NOT EXISTS messages (
@@ -158,10 +133,6 @@ CREATE TABLE IF NOT EXISTS messages (
     -- Platform-specific metadata
     metadata JSON,
 
-    -- Retained for compatibility with archives created before vector search
-    -- was removed. Application write paths do not use this column.
-    embed_gen INTEGER,
-
     UNIQUE(source_id, source_message_id)
 );
 
@@ -177,27 +148,6 @@ CREATE TABLE IF NOT EXISTS message_recipients (
     UNIQUE(message_id, participant_id, recipient_type)
 );
 
--- ============================================================================
--- REACTIONS & INTERACTIONS
--- ============================================================================
-
--- Reactions (tapbacks, emoji reactions)
-CREATE TABLE IF NOT EXISTS reactions (
-    id INTEGER PRIMARY KEY,
-    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
-
-    -- Reaction type and value
-    reaction_type TEXT NOT NULL,  -- 'tapback', 'emoji', 'like'
-    reaction_value TEXT NOT NULL, -- 'heart', 'thumbsup', etc. or emoji
-
-    -- Apple tapback types: 'love', 'like', 'dislike', 'laugh', 'emphasis', 'question'
-
-    created_at DATETIME,
-    removed_at DATETIME,
-
-    UNIQUE(message_id, participant_id, reaction_type, reaction_value)
-);
 
 -- ============================================================================
 -- ATTACHMENTS & MEDIA
@@ -333,38 +283,6 @@ CREATE TABLE IF NOT EXISTS sync_checkpoints (
     PRIMARY KEY (source_id, checkpoint_type)
 );
 
--- Per-mailbox IMAP sync state from the last fully completed sync.
--- UIDVALIDITY/UIDNEXT let subsequent syncs skip mailboxes that have
--- not changed instead of re-enumerating every folder.
-CREATE TABLE IF NOT EXISTS imap_folder_state (
-    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    mailbox TEXT NOT NULL,
-    uidvalidity INTEGER NOT NULL,
-    uidnext INTEGER NOT NULL,
-
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-    PRIMARY KEY (source_id, mailbox)
-);
-
--- Imported source items (files/objects already processed for resumable adapters)
-CREATE TABLE IF NOT EXISTS source_import_items (
-    id INTEGER PRIMARY KEY,
-    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    provider_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    checksum TEXT,
-    size INTEGER DEFAULT 0,
-    modified_at DATETIME,
-    imported_at DATETIME,
-    status TEXT NOT NULL DEFAULT 'pending',
-    records_imported INTEGER DEFAULT 0,
-    error_message TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(source_id, provider, provider_id)
-);
 
 -- ============================================================================
 -- INDEXES
@@ -383,9 +301,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_email ON participants(email_a
 CREATE INDEX IF NOT EXISTS idx_participants_canonical ON participants(canonical_id)
     WHERE canonical_id IS NOT NULL;
 
--- Participant identifiers
-CREATE INDEX IF NOT EXISTS idx_participant_identifiers_value ON participant_identifiers(identifier_value);
-CREATE INDEX IF NOT EXISTS idx_participant_identifiers_participant ON participant_identifiers(participant_id);
 
 -- Conversations
 CREATE INDEX IF NOT EXISTS idx_conversations_source ON conversations(source_id);
@@ -414,8 +329,6 @@ END;
 CREATE INDEX IF NOT EXISTS idx_message_recipients_message ON message_recipients(message_id);
 CREATE INDEX IF NOT EXISTS idx_message_recipients_participant ON message_recipients(participant_id, recipient_type);
 
--- Reactions
-CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
@@ -433,30 +346,6 @@ CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
 CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sync_run_items_run_status
     ON sync_run_items(sync_run_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_source_import_items_source_provider
-    ON source_import_items(source_id, provider, status);
-
--- ============================================================================
--- COLLECTIONS
--- ============================================================================
-
--- Collections (named groupings of sources treated as a single logical archive)
-CREATE TABLE IF NOT EXISTS collections (
-    id          INTEGER PRIMARY KEY,
-    name        TEXT    NOT NULL UNIQUE,
-    description TEXT    NOT NULL DEFAULT '',
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Collection membership (many sources per collection)
-CREATE TABLE IF NOT EXISTS collection_sources (
-    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-    source_id     INTEGER NOT NULL REFERENCES sources(id)     ON DELETE CASCADE,
-    PRIMARY KEY (collection_id, source_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_collection_sources_source_id
-    ON collection_sources(source_id);
 
 -- ============================================================================
 -- ACCOUNT IDENTITIES
@@ -488,3 +377,5 @@ CREATE TABLE IF NOT EXISTS applied_migrations (
     name        TEXT PRIMARY KEY,
     applied_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+PRAGMA user_version = 1;

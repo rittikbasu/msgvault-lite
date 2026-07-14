@@ -6,38 +6,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestServerConfigDefaults(t *testing.T) {
-	// Create a temp dir without a config file
-	tmpDir := t.TempDir()
-	t.Setenv("MSGVAULT_HOME", tmpDir)
-
-	cfg, err := Load("", "")
-	require.NoError(t, err, "Load()")
-
-	// Check server defaults: api_port defaults to 0, which auto-selects an
-	// open port at daemon startup (clients discover it via the runtime record).
-	assert.Equal(t, 0, cfg.Server.APIPort)
-	assert.Empty(t, cfg.Server.APIKey)
-}
-
-func TestAccountScheduleEmpty(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("MSGVAULT_HOME", tmpDir)
-
-	cfg, err := Load("", "")
-	require.NoError(t, err, "Load()")
-
-	assert.Empty(t, cfg.Accounts)
-
-	scheduled := cfg.ScheduledAccounts()
-	assert.Empty(t, scheduled)
-}
 
 func TestLoadIgnoresRetiredConfigSections(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -53,242 +25,45 @@ db_path = "vectors.db"
 
 [vector.embeddings]
 model = "retired-model"
+
+[server]
+api_port = 9090
+mcp_enabled = true
+
+[chat]
+model = "retired-model"
+
+[remote]
+url = "https://retired.example"
+
+[microsoft]
+client_id = "retired-client"
+
+[[accounts]]
+email = "retired@example.com"
+
+[[gcal]]
+email = "retired@example.com"
+
+[[synctech_sms.sources]]
+name = "retired-phone"
 `), 0o644), "WriteFile()")
 
 	_, err := Load(configPath, "")
 	require.NoError(t, err, "retired config keys should remain compatible")
 }
 
-func TestLoadWithServerConfig(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
+func TestLoadRejectsRetiredDatabaseURL(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("MSGVAULT_HOME", tmpDir)
-
-	configContent := `
-[server]
-api_port = 9090
-api_key = "test-secret-key"
-
-[[accounts]]
-email = "test@gmail.com"
-schedule = "0 2 * * *"
-enabled = true
-
-[[accounts]]
-email = "other@gmail.com"
-schedule = "0 3 * * *"
-enabled = false
-`
 	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(os.WriteFile(configPath, []byte(configContent), 0644), "WriteFile()")
-
-	cfg, err := Load(configPath, "")
-	require.NoError(err, "Load()")
-
-	// Check server config
-	assert.Equal(9090, cfg.Server.APIPort)
-	assert.Equal("test-secret-key", cfg.Server.APIKey)
-
-	// Check accounts
-	require.Len(cfg.Accounts, 2)
-
-	assert.Equal("test@gmail.com", cfg.Accounts[0].Email)
-	assert.Equal("0 2 * * *", cfg.Accounts[0].Schedule)
-	assert.True(cfg.Accounts[0].Enabled)
-}
-
-func TestLoadWithServerDaemonIdleTimeout(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	tmpDir := t.TempDir()
-
-	configContent := `
-[server]
-daemon_idle_timeout = "6h"
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile()")
-
-	cfg, err := Load(configPath, "")
-	require.NoError(err, "Load()")
-
-	assert.Equal(6*time.Hour, cfg.Server.DaemonIdleTimeout)
-}
-
-func TestServerDaemonAutoRestartDefault(t *testing.T) {
-	cfg := NewDefaultConfig()
-
-	assert.Equal(t, DaemonAutoRestartNewer, cfg.Server.DaemonAutoRestart)
-}
-
-func TestLoadWithServerDaemonAutoRestart(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	configContent := `
-[server]
-daemon_auto_restart = "always"
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile()")
-
-	cfg, err := Load(configPath, "")
-	require.NoError(t, err, "Load()")
-
-	assert.Equal(t, DaemonAutoRestartAlways, cfg.Server.DaemonAutoRestart)
-}
-
-func TestLoadWithInvalidServerDaemonAutoRestart(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	configContent := `
-[server]
-daemon_auto_restart = "sometimes"
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile()")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+[data]
+database_url = "postgres://retired.example/msgvault"
+`), 0o644), "WriteFile()")
 
 	_, err := Load(configPath, "")
-
-	require.Error(t, err, "Load()")
-	assert.Contains(t, err.Error(), "invalid [server] daemon_auto_restart")
-}
-
-func TestServerDaemonIdleTimeoutDefaultAndZero(t *testing.T) {
-	assert := assert.New(t)
-	cfg := NewDefaultConfig()
-	assert.Equal(20*time.Minute, cfg.Server.DaemonIdleTimeout)
-
-	tmpDir := t.TempDir()
-	configContent := `
-[server]
-daemon_idle_timeout = "0s"
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile()")
-
-	loaded, err := Load(configPath, "")
-	require.NoError(t, err, "Load()")
-	assert.Equal(time.Duration(0), loaded.Server.DaemonIdleTimeout)
-}
-
-func TestScheduledAccounts(t *testing.T) {
-	assert := assert.New(t)
-	cfg := &Config{
-		Accounts: []AccountSchedule{
-			{Email: "enabled@gmail.com", Schedule: "0 2 * * *", Enabled: true},
-			{Email: "disabled@gmail.com", Schedule: "0 3 * * *", Enabled: false},
-			{Email: "noschedule@gmail.com", Schedule: "", Enabled: true},
-			{Email: "both@gmail.com", Schedule: "0 4 * * *", Enabled: true},
-		},
-	}
-
-	scheduled := cfg.ScheduledAccounts()
-
-	require.Len(t, scheduled, 2)
-
-	// Should contain only enabled accounts with schedules
-	emails := make(map[string]bool)
-	for _, acc := range scheduled {
-		emails[acc.Email] = true
-	}
-
-	assert.True(emails["enabled@gmail.com"], "ScheduledAccounts() missing enabled@gmail.com")
-	assert.True(emails["both@gmail.com"], "ScheduledAccounts() missing both@gmail.com")
-	assert.False(emails["disabled@gmail.com"], "ScheduledAccounts() should not include disabled account")
-	assert.False(emails["noschedule@gmail.com"], "ScheduledAccounts() should not include account without schedule")
-}
-
-func TestGetAccountSchedule(t *testing.T) {
-	cfg := &Config{
-		Accounts: []AccountSchedule{
-			{Email: "test@gmail.com", Schedule: "0 2 * * *", Enabled: true},
-			{Email: "other@gmail.com", Schedule: "0 3 * * *", Enabled: false},
-		},
-	}
-
-	tests := []struct {
-		email     string
-		wantNil   bool
-		wantSched string
-	}{
-		{"test@gmail.com", false, "0 2 * * *"},
-		{"other@gmail.com", false, "0 3 * * *"},
-		{"notfound@gmail.com", true, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.email, func(t *testing.T) {
-			acc := cfg.GetAccountSchedule(tt.email)
-			if tt.wantNil {
-				assert.Nil(t, acc, "GetAccountSchedule(%q)", tt.email)
-				return
-			}
-			require.NotNil(t, acc, "GetAccountSchedule(%q)", tt.email)
-			assert.Equal(t, tt.wantSched, acc.Schedule, "GetAccountSchedule(%q).Schedule", tt.email)
-		})
-	}
-}
-
-func TestGetAccountScheduleReturnsCopy(t *testing.T) {
-	assert := assert.New(t)
-	cfg := &Config{
-		Accounts: []AccountSchedule{
-			{Email: "test@gmail.com", Schedule: "0 2 * * *", Enabled: true},
-		},
-	}
-
-	// Get a reference and mutate it
-	acc := cfg.GetAccountSchedule("test@gmail.com")
-	require.NotNil(t, acc, "GetAccountSchedule returned nil")
-
-	// Mutate the returned copy
-	acc.Schedule = "modified"
-	acc.Enabled = false
-	acc.Email = "hacked@gmail.com"
-
-	// Original config must be unchanged
-	assert.Equal("0 2 * * *", cfg.Accounts[0].Schedule, "original Schedule (mutation leaked)")
-	assert.True(cfg.Accounts[0].Enabled, "original Enabled (mutation leaked)")
-	assert.Equal("test@gmail.com", cfg.Accounts[0].Email, "original Email (mutation leaked)")
-}
-
-func TestSynctechSMSSourcesConfig(t *testing.T) {
-	require := require.New(t)
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	data := []byte(`
-[[synctech_sms.sources]]
-name = "pixel"
-backend = "drive"
-owner_phone = "+15550000001"
-folder_id = "drive-folder-id"
-google_account = "user@example.com"
-schedule = "30 4 * * *"
-include_sms = true
-include_mms = true
-include_calls = true
-include_attachments = true
-stable_after = "10m"
-oauth_app = "personal"
-`)
-	require.NoError(os.WriteFile(configPath, data, 0o600), "write config")
-	cfg, err := Load(configPath, "")
-	require.NoError(err, "Load")
-	src := cfg.GetSynctechSMSSource("pixel")
-	require.NotNil(src, "GetSynctechSMSSource returned nil")
-	require.Truef(src.Backend == "drive" && src.OwnerPhone == "+15550000001" && src.FolderID == "drive-folder-id" && src.GoogleAccount == "user@example.com" && src.StableAfter == "10m", "source mismatch: %#v", src)
-}
-
-func TestSynctechSMSScheduledSources(t *testing.T) {
-	cfg := NewDefaultConfig()
-	cfg.SynctechSMS.Sources = []SynctechSMSSource{
-		{Name: "enabled", Enabled: true, Schedule: "30 4 * * *", OwnerPhone: "+15550000001", Backend: "local", Path: "/tmp/inbox"},
-		{Name: "disabled", Enabled: false, Schedule: "30 4 * * *", OwnerPhone: "+15550000002", Backend: "local", Path: "/tmp/inbox"},
-		{Name: "unscheduled", Enabled: true, OwnerPhone: "+15550000003", Backend: "local", Path: "/tmp/inbox"},
-	}
-	got := cfg.ScheduledSynctechSMSSources()
-	require.Truef(t, len(got) == 1 && got[0].Name == "enabled", "ScheduledSynctechSMSSources = %#v", got)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "[data].database_url is no longer supported")
 }
 
 func TestExpandPath(t *testing.T) {
@@ -412,9 +187,9 @@ func TestLoadEmptyPath(t *testing.T) {
 	assert.Equal(tmpDir, cfg.Data.DataDir)
 	assert.Equal(5, cfg.Sync.RateLimitQPS)
 
-	// DatabaseDSN should return default path
+	// DatabasePath should return the archive path.
 	expectedDB := filepath.Join(tmpDir, "msgvault.db")
-	assert.Equal(expectedDB, cfg.DatabaseDSN())
+	assert.Equal(expectedDB, cfg.DatabasePath())
 }
 
 func TestLoadWithConfigFile(t *testing.T) {
@@ -488,7 +263,7 @@ rate_limit_qps = 3
 
 	// Derived paths should use the custom directory
 	expectedDB := filepath.Join(tmpDir, "msgvault.db")
-	assert.Equal(expectedDB, cfg.DatabaseDSN())
+	assert.Equal(expectedDB, cfg.DatabasePath())
 	expectedTokens := filepath.Join(tmpDir, "tokens")
 	assert.Equal(expectedTokens, cfg.TokensDir())
 }
@@ -730,7 +505,7 @@ func TestLoadWithHomeDir(t *testing.T) {
 
 	// Derived paths should use the home directory
 	expectedDB := filepath.Join(homeDir, "msgvault.db")
-	assert.Equal(expectedDB, cfg.DatabaseDSN())
+	assert.Equal(expectedDB, cfg.DatabasePath())
 	expectedTokens := filepath.Join(homeDir, "tokens")
 	assert.Equal(expectedTokens, cfg.TokensDir())
 }
@@ -767,28 +542,6 @@ func TestLoadWithHomeDirExpandsTilde(t *testing.T) {
 	assert.Equal(expected, cfg.Data.DataDir)
 }
 
-// TestLoadDeprecatedMCPEnabled verifies that old config files containing the
-// removed mcp_enabled field still load successfully. BurntSushi/toml silently
-// ignores unknown keys, so existing configs should not break after the field
-// was removed from ServerConfig.
-func TestLoadDeprecatedMCPEnabled(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("MSGVAULT_HOME", tmpDir)
-
-	configContent := `
-[server]
-api_port = 9090
-mcp_enabled = true
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644), "WriteFile()")
-
-	cfg, err := Load("", "")
-	require.NoError(t, err, "Load() should succeed with deprecated mcp_enabled")
-
-	assert.Equal(t, 9090, cfg.Server.APIPort)
-}
-
 func TestNewDefaultConfig(t *testing.T) {
 	// Use a temp directory as MSGVAULT_HOME
 	tmpDir := t.TempDir()
@@ -808,16 +561,10 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 
 	cfg := NewDefaultConfig()
 	cfg.HomeDir = tmpDir
+	cfg.Data.DataDir = filepath.Join(tmpDir, "data")
 	cfg.OAuth.ClientSecrets = filepath.Join(tmpDir, "secrets.json")
 	cfg.Sync.RateLimitQPS = 10
-	cfg.Server.APIPort = 9090
-	cfg.Server.APIKey = "my-server-key"
-	cfg.Remote.URL = "http://nas:8080"
-	cfg.Remote.APIKey = "my-remote-key"
-	cfg.Remote.AllowInsecure = true
-	cfg.Accounts = []AccountSchedule{
-		{Email: "user@gmail.com", Schedule: "0 2 * * *", Enabled: true},
-	}
+	cfg.Backup.Repo = filepath.Join(tmpDir, "backups")
 
 	require.NoError(cfg.Save(), "Save()")
 
@@ -825,16 +572,11 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 	loaded, err := Load(cfg.ConfigFilePath(), "")
 	require.NoError(err, "Load()")
 
-	// Verify all fields survived the round trip
+	// Verify live fields survived the round trip.
+	assert.Equal(cfg.Data.DataDir, loaded.Data.DataDir)
 	assert.Equal(cfg.OAuth.ClientSecrets, loaded.OAuth.ClientSecrets)
 	assert.Equal(10, loaded.Sync.RateLimitQPS)
-	assert.Equal(9090, loaded.Server.APIPort)
-	assert.Equal("my-server-key", loaded.Server.APIKey)
-	assert.Equal("http://nas:8080", loaded.Remote.URL)
-	assert.Equal("my-remote-key", loaded.Remote.APIKey)
-	assert.True(loaded.Remote.AllowInsecure)
-	require.Len(loaded.Accounts, 1)
-	assert.Equal("user@gmail.com", loaded.Accounts[0].Email)
+	assert.Equal(cfg.Backup.Repo, loaded.Backup.Repo)
 }
 
 func TestSave_CreatesFileWithSecurePermissions(t *testing.T) {
@@ -1322,122 +1064,9 @@ client_secrets = "/path/to/acme.json"
 	assert.Equal("/path/to/acme.json", path)
 }
 
-func TestSave_AllowInsecureRoundTrip(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	tmpDir := t.TempDir()
-
-	// Save with AllowInsecure = false (default)
-	cfg := NewDefaultConfig()
-	cfg.HomeDir = tmpDir
-	cfg.Remote.URL = "https://nas:8080"
-	cfg.Remote.APIKey = "key"
-	require.NoError(cfg.Save(), "Save()")
-
-	loaded, err := Load(cfg.ConfigFilePath(), "")
-	require.NoError(err, "Load()")
-	assert.False(loaded.Remote.AllowInsecure, "AllowInsecure should be false when not set")
-
-	// Now save with AllowInsecure = true
-	cfg.Remote.AllowInsecure = true
-	require.NoError(cfg.Save(), "Save()")
-
-	loaded, err = Load(cfg.ConfigFilePath(), "")
-	require.NoError(err, "Load()")
-	assert.True(loaded.Remote.AllowInsecure, "AllowInsecure should be true after saving with true")
-}
-
-func TestMicrosoftConfig(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	tmpDir := t.TempDir()
-	configContent := `
-[microsoft]
-client_id = "test-client-id-123"
-tenant_id = "my-tenant"
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(os.WriteFile(configPath, []byte(configContent), 0644))
-
-	cfg, err := Load(configPath, tmpDir)
-	require.NoError(err)
-	assert.Equal("test-client-id-123", cfg.Microsoft.ClientID)
-	assert.Equal("my-tenant", cfg.Microsoft.TenantID)
-}
-
-func TestMicrosoftConfig_DefaultTenant(t *testing.T) {
-	cfg := NewDefaultConfig()
-	assert.Equal(t, "common", cfg.Microsoft.EffectiveTenantID())
-}
-
 func TestDatabasePath(t *testing.T) {
-	t.Run("plain filesystem path passes through", func(t *testing.T) {
-		cfg := &Config{}
-		cfg.Data.DataDir = "/tmp/data"
-		got, err := cfg.DatabasePath()
-		require.NoError(t, err, "DatabasePath")
-		want := filepath.Join("/tmp/data", "msgvault.db")
-		assert.Equal(t, want, got)
-	})
-
-	t.Run("file: URI is stripped", func(t *testing.T) {
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "file:/var/lib/msgvault.db"
-		got, err := cfg.DatabasePath()
-		require.NoError(t, err, "DatabasePath")
-		assert.Equal(t, "/var/lib/msgvault.db", got)
-	})
-
-	t.Run("file: URI with query string drops query", func(t *testing.T) {
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "file:/var/lib/msgvault.db?_journal_mode=WAL&_busy_timeout=5000"
-		got, err := cfg.DatabasePath()
-		require.NoError(t, err, "DatabasePath")
-		assert.Equal(t, "/var/lib/msgvault.db", got)
-	})
-
-	t.Run("file: URI decodes percent-encoded path", func(t *testing.T) {
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "file:/var/lib/my%20vault.db"
-		got, err := cfg.DatabasePath()
-		require.NoError(t, err, "DatabasePath")
-		assert.Equal(t, "/var/lib/my vault.db", got)
-	})
-
-	t.Run("file: URI relative path (Opaque)", func(t *testing.T) {
-		// SQLite accepts file:rel/path; url.Parse routes that into u.Opaque.
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "file:msgvault.db"
-		got, err := cfg.DatabasePath()
-		require.NoError(t, err, "DatabasePath")
-		assert.Equal(t, "msgvault.db", got)
-	})
-
-	t.Run("file: URI relative path with percent-encoding (Opaque)", func(t *testing.T) {
-		// url.Parse decodes percent-encoding for u.Path but not u.Opaque,
-		// so DatabasePath has to PathUnescape the relative-form bytes
-		// itself. Without that, "file:my%20vault.db" never matches the
-		// on-disk filename "my vault.db" and backups break.
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "file:my%20vault.db"
-		got, err := cfg.DatabasePath()
-		require.NoError(t, err, "DatabasePath")
-		assert.Equal(t, "my vault.db", got)
-	})
-
-	t.Run("postgres:// is rejected", func(t *testing.T) {
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "postgres://user@host:5432/db"
-		_, err := cfg.DatabasePath()
-		require.Error(t, err, "DatabasePath: expected error for non-file DSN")
-	})
-
-	t.Run("empty file: URI is rejected", func(t *testing.T) {
-		cfg := &Config{}
-		cfg.Data.DatabaseURL = "file:"
-		_, err := cfg.DatabasePath()
-		require.Error(t, err, "DatabasePath: expected error for empty file: URI")
-	})
+	cfg := &Config{Data: DataConfig{DataDir: "/tmp/data"}}
+	assert.Equal(t, filepath.Join("/tmp/data", "msgvault.db"), cfg.DatabasePath())
 }
 
 func TestLoadWithBackupConfig(t *testing.T) {

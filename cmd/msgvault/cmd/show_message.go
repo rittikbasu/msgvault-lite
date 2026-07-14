@@ -66,7 +66,7 @@ func resolveMessageIDArg(raw string) (string, error) {
 }
 
 func runShowMessage(cmd *cobra.Command, idStr string) error {
-	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
+	s, err := store.OpenReadOnly(cfg.DatabasePath())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

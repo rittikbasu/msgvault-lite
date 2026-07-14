@@ -36,7 +36,7 @@ var messagesCmd = &cobra.Command{
 }
 
 func runMessages(cmd *cobra.Command) error {
-	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
+	s, err := store.OpenReadOnly(cfg.DatabasePath())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

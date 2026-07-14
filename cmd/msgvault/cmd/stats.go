@@ -21,7 +21,8 @@ var statsCmd = &cobra.Command{
 
 func runStats(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
-	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
+	dbPath := cfg.DatabasePath()
+	s, err := store.OpenReadOnly(dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -43,7 +44,7 @@ func runStats(cmd *cobra.Command, _ []string) error {
 	if statsJSON {
 		return writeJSON(out, jsonStatusResponse{
 			SchemaVersion: jsonSchemaVersion,
-			Database:      cfg.DatabaseDSN(),
+			Database:      dbPath,
 			Messages: jsonMessageCounts{
 				Total:             dbStats.MessageCount + dbStats.SourceDeletedCount,
 				Active:            dbStats.MessageCount,
@@ -57,7 +58,7 @@ func runStats(cmd *cobra.Command, _ []string) error {
 		})
 	}
 
-	_, _ = fmt.Fprintf(out, "Database: %s\n", cfg.DatabaseDSN())
+	_, _ = fmt.Fprintf(out, "Database: %s\n", dbPath)
 
 	printStats(out, dbStats)
 	return nil

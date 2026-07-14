@@ -337,10 +337,7 @@ func runBackupCreateLocal(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	dbPath, err := cfg.DatabasePath()
-	if err != nil {
-		return err
-	}
+	dbPath := cfg.DatabasePath()
 	r, err := backup.Open(repo)
 	if err != nil {
 		return fmt.Errorf("opening backup repository: %w", err)

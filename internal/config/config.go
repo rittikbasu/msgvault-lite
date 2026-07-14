@@ -5,120 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"go.kenn.io/msgvault/internal/fileutil"
 )
-
-const (
-	DaemonAutoRestartNewer  = "newer"
-	DaemonAutoRestartNever  = "never"
-	DaemonAutoRestartAlways = "always"
-)
-
-// ChatConfig holds chat/LLM configuration.
-type ChatConfig struct {
-	Server     string `toml:"server"`      // Ollama server URL
-	Model      string `toml:"model"`       // Model name
-	MaxResults int    `toml:"max_results"` // Top-K messages to retrieve
-}
-
-// ServerConfig holds HTTP API server configuration.
-type ServerConfig struct {
-	APIPort           int           `toml:"api_port"`            // HTTP server port; 0 (the default) auto-selects an open port at daemon startup and clients discover it via the daemon runtime record. Set api_port explicitly for a stable port (e.g. remote/NAS deployments).
-	BindAddr          string        `toml:"bind_addr"`           // Bind address (default: 127.0.0.1)
-	APIKey            string        `toml:"api_key"`             // API authentication key
-	AllowInsecure     bool          `toml:"allow_insecure"`      // Allow unauthenticated non-loopback access
-	CORSOrigins       []string      `toml:"cors_origins"`        // Allowed CORS origins (empty = disabled)
-	CORSCredentials   bool          `toml:"cors_credentials"`    // Allow credentials in CORS
-	CORSMaxAge        int           `toml:"cors_max_age"`        // Preflight cache duration in seconds
-	DaemonIdleTimeout time.Duration `toml:"daemon_idle_timeout"` // Background daemon idle timeout (0 disables)
-	DaemonAutoRestart string        `toml:"daemon_auto_restart"` // never, newer, or always
-}
-
-func (s *ServerConfig) ApplyDefaults() {
-	s.DaemonAutoRestart = strings.ToLower(strings.TrimSpace(s.DaemonAutoRestart))
-	if s.DaemonAutoRestart == "" {
-		s.DaemonAutoRestart = DaemonAutoRestartNewer
-	}
-}
-
-func (s *ServerConfig) Validate() error {
-	switch s.DaemonAutoRestart {
-	case DaemonAutoRestartNewer, DaemonAutoRestartNever, DaemonAutoRestartAlways:
-		return nil
-	default:
-		return fmt.Errorf("invalid [server] daemon_auto_restart %q (want %q, %q, or %q)",
-			s.DaemonAutoRestart,
-			DaemonAutoRestartNewer,
-			DaemonAutoRestartNever,
-			DaemonAutoRestartAlways)
-	}
-}
-
-// IsLoopback returns true if the bind address is a loopback address.
-// Handles the full 127.0.0.0/8 range, IPv6 ::1, and "localhost".
-func (s *ServerConfig) IsLoopback() bool {
-	addr := s.BindAddr
-	if addr == "" || addr == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(addr)
-	return ip != nil && ip.IsLoopback()
-}
-
-// ValidateSecure returns an error if the server is configured insecurely
-// without an explicit opt-in via allow_insecure.
-func (s *ServerConfig) ValidateSecure() error {
-	if !s.IsLoopback() && s.APIKey == "" && !s.AllowInsecure {
-		return fmt.Errorf("refusing to start: bind address %q is not loopback and no api_key is set\n\n"+
-			"Set [server] api_key in config.toml, or set allow_insecure = true to override", s.BindAddr)
-	}
-	return nil
-}
-
-// AccountSchedule defines sync schedule for a single account.
-type AccountSchedule struct {
-	Email    string `toml:"email"`    // Gmail account email
-	Schedule string `toml:"schedule"` // Cron expression (e.g., "0 2 * * *" for 2am daily)
-	Enabled  bool   `toml:"enabled"`  // Whether scheduled sync is active
-}
-
-type SynctechSMSConfig struct {
-	Sources []SynctechSMSSource `toml:"sources"`
-}
-
-type SynctechSMSSource struct {
-	Name               string `toml:"name"`
-	Enabled            bool   `toml:"enabled"`
-	Backend            string `toml:"backend"` // "local" or "drive"
-	Path               string `toml:"path"`
-	FolderID           string `toml:"folder_id"`
-	GoogleAccount      string `toml:"google_account"`
-	OwnerPhone         string `toml:"owner_phone"`
-	Schedule           string `toml:"schedule"`
-	IncludeSMS         bool   `toml:"include_sms"`
-	IncludeMMS         bool   `toml:"include_mms"`
-	IncludeCalls       bool   `toml:"include_calls"`
-	IncludeAttachments bool   `toml:"include_attachments"`
-	StableAfter        string `toml:"stable_after"`
-	OAuthApp           string `toml:"oauth_app"`
-}
-
-// RemoteConfig holds configuration for a remote msgvault server.
-// Used by export-token to remember the NAS/server destination.
-type RemoteConfig struct {
-	URL           string `toml:"url"`            // Remote server URL (e.g., http://nas:8080)
-	APIKey        string `toml:"api_key"`        // API key for authentication
-	AllowInsecure bool   `toml:"allow_insecure"` // Allow HTTP (insecure) for trusted networks
-}
 
 // IdentityConfig holds the user's curated identity addresses.
 type IdentityConfig struct {
@@ -144,19 +38,12 @@ func (b *BackupConfig) Validate() error {
 }
 
 type Config struct {
-	Data        DataConfig        `toml:"data"`
-	Log         LogConfig         `toml:"log"`
-	OAuth       OAuthConfig       `toml:"oauth"`
-	Microsoft   MicrosoftConfig   `toml:"microsoft"`
-	Sync        SyncConfig        `toml:"sync"`
-	Chat        ChatConfig        `toml:"chat"`
-	Server      ServerConfig      `toml:"server"`
-	Remote      RemoteConfig      `toml:"remote"`
-	Identity    IdentityConfig    `toml:"identity"`
-	Accounts    []AccountSchedule `toml:"accounts"`
-	SynctechSMS SynctechSMSConfig `toml:"synctech_sms"`
-	GCal        []GCalSource      `toml:"gcal"`
-	Backup      BackupConfig      `toml:"backup"`
+	Data     DataConfig     `toml:"data"`
+	Log      LogConfig      `toml:"log"`
+	OAuth    OAuthConfig    `toml:"oauth"`
+	Sync     SyncConfig     `toml:"sync"`
+	Identity IdentityConfig `toml:"identity"`
+	Backup   BackupConfig   `toml:"backup"`
 
 	// Computed paths (not from config file)
 	HomeDir    string `toml:"-"`
@@ -199,8 +86,7 @@ type LogConfig struct {
 
 // DataConfig holds data storage configuration.
 type DataConfig struct {
-	DataDir     string `toml:"data_dir"`
-	DatabaseURL string `toml:"database_url"`
+	DataDir string `toml:"data_dir"`
 }
 
 // OAuthApp holds configuration for a named OAuth application.
@@ -265,21 +151,6 @@ func (o *OAuthConfig) HasAnyConfig() bool {
 	return false
 }
 
-// MicrosoftConfig holds Microsoft 365 / Azure AD OAuth configuration.
-type MicrosoftConfig struct {
-	ClientID string `toml:"client_id"`
-	TenantID string `toml:"tenant_id"`
-}
-
-// EffectiveTenantID returns the tenant ID, defaulting to "common"
-// (multi-tenant, works for personal + org accounts).
-func (c *MicrosoftConfig) EffectiveTenantID() string {
-	if c.TenantID == "" {
-		return "common"
-	}
-	return c.TenantID
-}
-
 // SyncConfig holds sync-related configuration.
 type SyncConfig struct {
 	RateLimitQPS int `toml:"rate_limit_qps"`
@@ -301,7 +172,7 @@ func DefaultHome() string {
 // NewDefaultConfig returns a configuration with default values.
 func NewDefaultConfig() *Config {
 	homeDir := DefaultHome()
-	cfg := &Config{
+	return &Config{
 		HomeDir: homeDir,
 		Data: DataConfig{
 			DataDir: homeDir,
@@ -309,23 +180,7 @@ func NewDefaultConfig() *Config {
 		Sync: SyncConfig{
 			RateLimitQPS: 5,
 		},
-		Chat: ChatConfig{
-			Server:     "http://localhost:11434",
-			Model:      "gpt-oss-128k",
-			MaxResults: 20,
-		},
-		Server: ServerConfig{
-			APIPort:           0,
-			BindAddr:          "127.0.0.1",
-			DaemonIdleTimeout: 20 * time.Minute,
-			DaemonAutoRestart: DaemonAutoRestartNewer,
-		},
-		Accounts:    []AccountSchedule{},
-		SynctechSMS: SynctechSMSConfig{Sources: []SynctechSMSSource{}},
-		GCal:        []GCalSource{},
 	}
-	cfg.Server.ApplyDefaults()
-	return cfg
 }
 
 // Load reads the configuration from the specified file.
@@ -374,13 +229,19 @@ func Load(path, homeDir string) (*Config, error) {
 		cfg.Data.DataDir = cfg.HomeDir
 	}
 
-	if _, err := toml.DecodeFile(path, cfg); err != nil {
+	metadata, err := toml.DecodeFile(path, cfg)
+	if err != nil {
 		if strings.Contains(err.Error(), "invalid escape") ||
 			strings.Contains(err.Error(), "hexadecimal digits after") {
 			return nil, fmt.Errorf("decode config: %w -- hint: Windows paths in TOML must use "+
 				"forward slashes (C:/Games/msgvault) or single quotes ('C:\\Games\\msgvault')", err)
 		}
 		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	if metadata.IsDefined("data", "database_url") {
+		return nil, errors.New(
+			"[data].database_url is no longer supported; move the SQLite archive to <data_dir>/msgvault.db",
+		)
 	}
 
 	// Expand ~ in paths
@@ -410,87 +271,16 @@ func Load(path, homeDir string) (*Config, error) {
 		}
 	}
 
-	cfg.Server.ApplyDefaults()
-	if err := cfg.Server.Validate(); err != nil {
-		return nil, err
-	}
 	if err := cfg.Backup.Validate(); err != nil {
 		return nil, err
 	}
-	cfg.applySynctechSMSDefaults()
-	cfg.applyGCalDefaults()
 
 	return cfg, nil
 }
 
-func (c *Config) applySynctechSMSDefaults() {
-	for i := range c.SynctechSMS.Sources {
-		src := &c.SynctechSMS.Sources[i]
-		if src.Backend == "" {
-			src.Backend = "local"
-		}
-		if !src.IncludeSMS && !src.IncludeMMS && !src.IncludeCalls {
-			src.IncludeSMS = true
-			src.IncludeMMS = true
-			src.IncludeCalls = true
-		}
-		if src.StableAfter == "" {
-			src.StableAfter = "10m"
-		}
-	}
-}
-
-// DatabaseDSN returns the database connection string or file path.
-func (c *Config) DatabaseDSN() string {
-	if c.Data.DatabaseURL != "" {
-		return c.Data.DatabaseURL
-	}
+// DatabasePath returns the local SQLite archive path.
+func (c *Config) DatabasePath() string {
 	return filepath.Join(c.Data.DataDir, "msgvault.db")
-}
-
-// DatabasePath returns the on-disk SQLite filesystem path for backup
-// operations (VACUUM INTO, copies). It accepts the plain filesystem
-// path and the SQLite "file:" URI form, decoding any percent-encoded
-// bytes (e.g. "file:/var/lib/my%20vault.db" -> "/var/lib/my vault.db")
-// and dropping the URI query string. Returns an error for non-file
-// DSNs (e.g. "postgres://..."), which the SQLite-only backup helpers
-// cannot operate on.
-func (c *Config) DatabasePath() (string, error) {
-	dsn := c.DatabaseDSN()
-	if strings.HasPrefix(dsn, "file:") {
-		u, err := url.Parse(dsn)
-		if err != nil {
-			return "", fmt.Errorf("parse file: URI %q: %w", dsn, err)
-		}
-		// SQLite accepts both file:/abs/path (Path) and file:rel/path
-		// (Opaque) shapes. url.Parse decodes percent-encoding for Path
-		// but NOT for Opaque, so a relative file: URI like
-		// "file:my%20vault.db" leaves the encoding intact in u.Opaque
-		// and the on-disk filename never matches. PathUnescape handles
-		// the relative-form case explicitly.
-		path := u.Path
-		if path == "" {
-			decoded, err := url.PathUnescape(u.Opaque)
-			if err != nil {
-				return "", fmt.Errorf("decode file: URI opaque part %q: %w", u.Opaque, err)
-			}
-			path = decoded
-		}
-		if path == "" {
-			return "", fmt.Errorf("empty file: URI in database DSN: %q", dsn)
-		}
-		return path, nil
-	}
-	if strings.Contains(dsn, "://") {
-		// postgres://, mysql://, etc. — non-file DSN; backup is
-		// SQLite-specific and the caller can't operate on these.
-		return "", fmt.Errorf(
-			"backup operations require a SQLite filesystem DSN; "+
-				"got non-file DSN %q (set [data].database_url to a "+
-				"plain filesystem path or file: URI)", dsn,
-		)
-	}
-	return dsn, nil
 }
 
 // AttachmentsDir returns the path to the attachments directory.
@@ -588,94 +378,6 @@ func (c *Config) Save() error {
 
 	success = true
 	return nil
-}
-
-// ScheduledAccounts returns accounts with scheduling enabled.
-func (c *Config) ScheduledAccounts() []AccountSchedule {
-	var scheduled []AccountSchedule
-	for _, acc := range c.Accounts {
-		if acc.Enabled && acc.Schedule != "" {
-			scheduled = append(scheduled, acc)
-		}
-	}
-	return scheduled
-}
-
-// GetAccountSchedule returns the schedule for a specific account email.
-// Returns nil if the account is not configured for scheduling.
-// The returned value is a copy, so mutations won't affect the config.
-func (c *Config) GetAccountSchedule(email string) *AccountSchedule {
-	for i := range c.Accounts {
-		if c.Accounts[i].Email == email {
-			acc := c.Accounts[i]
-			return &acc
-		}
-	}
-	return nil
-}
-
-// GCalSource is one configured Google Calendar sync target. Each entry is a
-// top-level [[gcal]] table.
-type GCalSource struct {
-	Name      string   `toml:"name"`      // identifier for sync-calendar <name>; defaults to Email
-	Email     string   `toml:"email"`     // the OAuth account = token key
-	OAuthApp  string   `toml:"oauth_app"` // optional named OAuth app
-	Calendars []string `toml:"calendars"` // optional calendarId filter; empty = owner+writer
-	Schedule  string   `toml:"schedule"`  // 5-field cron; empty = not daemon-scheduled
-	Enabled   bool     `toml:"enabled"`
-}
-
-// applyGCalDefaults normalizes [[gcal]] entries: a source with no name takes its
-// email, so `sync-calendar <email>` resolves it.
-func (c *Config) applyGCalDefaults() {
-	for i := range c.GCal {
-		if c.GCal[i].Name == "" {
-			c.GCal[i].Name = c.GCal[i].Email
-		}
-	}
-}
-
-// GetGCalSource returns the configured calendar source matching name or email
-// (case-insensitive), or nil.
-func (c *Config) GetGCalSource(name string) *GCalSource {
-	for _, src := range c.GCal {
-		if strings.EqualFold(src.Name, name) || strings.EqualFold(src.Email, name) {
-			cp := src
-			return &cp
-		}
-	}
-	return nil
-}
-
-// ScheduledGCalSources returns enabled calendar sources with a cron schedule.
-func (c *Config) ScheduledGCalSources() []GCalSource {
-	var out []GCalSource
-	for _, src := range c.GCal {
-		if src.Enabled && src.Schedule != "" {
-			out = append(out, src)
-		}
-	}
-	return out
-}
-
-func (c *Config) GetSynctechSMSSource(name string) *SynctechSMSSource {
-	for _, src := range c.SynctechSMS.Sources {
-		if strings.EqualFold(src.Name, name) {
-			cp := src
-			return &cp
-		}
-	}
-	return nil
-}
-
-func (c *Config) ScheduledSynctechSMSSources() []SynctechSMSSource {
-	var out []SynctechSMSSource
-	for _, src := range c.SynctechSMS.Sources {
-		if src.Enabled && src.Schedule != "" {
-			out = append(out, src)
-		}
-	}
-	return out
 }
 
 // MkTempDir creates a temporary directory with fallback logic for restricted

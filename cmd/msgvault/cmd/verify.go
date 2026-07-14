@@ -116,7 +116,7 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	}
 
 	// Verification must never initialize or migrate the archive.
-	dbPath := cfg.DatabaseDSN()
+	dbPath := cfg.DatabasePath()
 	s, err := store.OpenReadOnly(dbPath)
 	if err != nil {
 		return fmt.Errorf("open database read-only: %w", err)

@@ -80,7 +80,7 @@ Examples:
 }
 
 func runSearch(cmd *cobra.Command, queryStr string) error {
-	s, err := store.OpenReadOnly(cfg.DatabaseDSN())
+	s, err := store.OpenReadOnly(cfg.DatabasePath())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

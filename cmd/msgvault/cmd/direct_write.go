@@ -50,7 +50,7 @@ func archiveOwnedError(dataDir string) error {
 // database file on the first write command, which is the right behavior for a
 // freshly installed CLI.
 func openStoreAndInitWith(migrate func(*store.Store) error) (*store.Store, error) {
-	dbPath := cfg.DatabaseDSN()
+	dbPath := cfg.DatabasePath()
 	st, err := store.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)

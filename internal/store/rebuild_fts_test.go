@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/store"
-	"go.kenn.io/msgvault/internal/testutil"
 	"go.kenn.io/msgvault/internal/testutil/storetest"
 )
 
@@ -102,7 +101,7 @@ func TestStore_RebuildFTS_BypassesAvailabilityFlag(t *testing.T) {
 func TestStore_RebuildFTS_AfterTableDropped(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
-	testutil.SkipIfPostgres(t, "SQLite-only: drops the messages_fts virtual table; PG FTS is a column on messages, not a separate table — the PG DROP INDEX path is covered by dialect_pg tests")
+
 	f := storetest.New(t)
 	if !f.Store.FTS5Available() {
 		t.Skip("FTS5 not available")

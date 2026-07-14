@@ -163,7 +163,7 @@ func TestLastModified_BodyInsertBumpsParent(t *testing.T) {
 // CURRENT_TIMESTAMP backfills automatically and its triggers are created
 // after the column, so the upgrade ordering risk does not apply there.
 func TestLastModified_UpgradePathMissingColumn(t *testing.T) {
-	testutil.SkipIfPostgres(t, "SQLite ALTER TABLE DROP COLUMN + deferred trigger column resolution")
+
 	require := require.New(t)
 	assert := assert.New(t)
 

@@ -23,6 +23,21 @@ func TestStore_Open(t *testing.T) {
 	assert.NotNil(t, st.DB(), "DB() returned nil")
 }
 
+func TestStoreRejectsDatabaseURLs(t *testing.T) {
+	for _, dbURL := range []string{
+		"postgres://user:sensitive-password@example.com/msgvault",
+		"postgresql://user@example.com/msgvault",
+		"mysql://user@example.com/msgvault",
+	} {
+		t.Run(dbURL, func(t *testing.T) {
+			st, err := store.Open(dbURL)
+			assert.Nil(t, st)
+			assert.ErrorContains(t, err, "database URLs are not supported")
+			assert.NotContains(t, err.Error(), "sensitive-password")
+		})
+	}
+}
+
 func TestStore_GetStats_Empty(t *testing.T) {
 	assert := assert.New(t)
 	st := testutil.NewTestStore(t)
@@ -1128,7 +1143,7 @@ func TestStore_ReplaceMessageRecipients_LargeBatch(t *testing.T) {
 func TestStore_UpsertFTS(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
-	testutil.SkipIfPostgres(t, "directly queries the SQLite FTS5 vtable with MATCH; PG uses a tsvector column tested via FTSSearchClause")
+
 	f := storetest.New(t)
 
 	if !f.Store.FTS5Available() {
@@ -1182,7 +1197,7 @@ func TestStore_UpsertFTS(t *testing.T) {
 func TestStore_BackfillFTS(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
-	testutil.SkipIfPostgres(t, "directly queries the SQLite FTS5 vtable; PG backfill is exercised separately via FTSBackfillBatchSQL")
+
 	f := storetest.New(t)
 
 	if !f.Store.FTS5Available() {
@@ -1259,7 +1274,7 @@ func TestStore_FTS5Available(t *testing.T) {
 func TestStore_NeedsFTSBackfill(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
-	testutil.SkipIfPostgres(t, "directly mutates the SQLite FTS5 vtable; PG NeedsFTSBackfill probes the tsvector column instead")
+
 	f := storetest.New(t)
 
 	if !f.Store.FTS5Available() {

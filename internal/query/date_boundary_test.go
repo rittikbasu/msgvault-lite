@@ -29,9 +29,6 @@ import (
 // boundary shift flips its inclusion. The test asserts the store API agrees
 // with the engine for every after:/before: bound around that midnight — no
 // off-by-one-day divergence between the two paths or the two backends.
-//
-// Runs against whichever backend testutil.NewTestStore selects; setting
-// MSGVAULT_TEST_DB to a postgres:// DSN exercises the PG path too.
 func TestDateBoundary_StoreAPIMatchesEngine(t *testing.T) {
 	require := require.New(t)
 	st := testutil.NewTestStore(t)

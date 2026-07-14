@@ -13,7 +13,7 @@ import (
 
 // attachmentCorpus seeds a multi-source corpus of messages with attachments
 // to exercise content-hash dedup, cross-source dedup, and ON DELETE CASCADE
-// against the live store (SQLite or PostgreSQL via MSGVAULT_TEST_DB).
+// against the live SQLite store.
 type attachmentCorpus struct {
 	t       *testing.T
 	store   *store.Store

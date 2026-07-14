@@ -26,8 +26,6 @@ type ColumnMigration struct {
 // Dialect abstracts database-specific SQL generation and behavior.
 // Implementations exist for SQLite (default) and PostgreSQL (opt-in).
 type Dialect interface {
-	// DriverName returns the database/sql driver name ("sqlite3" or "pgx").
-	DriverName() string
 
 	// Rebind converts a query with ? placeholders to the appropriate format
 	// for the database driver. No-op for SQLite; converts to $1, $2, ... for PostgreSQL.
@@ -121,41 +119,13 @@ type Dialect interface {
 	// pool-wide 30s timeout on a large archive (finding S1).
 	FTSRebuildSchema(q querier) error
 
-	// EnsureFTSIndex idempotently creates any FTS index that must be created
-	// AFTER LegacyColumnMigrations have added the FTS column. SQLite is a
-	// no-op (its messages_fts virtual table is created via SchemaFTS). For
-	// PostgreSQL it creates the GIN index on messages.search_fts; this lives
-	// here, not in schema_pg.sql, because a legacy PG database missing the
-	// search_fts column would fail the schema-file Exec on the index before
-	// the ADD COLUMN migration could run. Called by InitSchema after
-	// LegacyColumnMigrations. [cr2-10]
-	//
-	// Takes a querier (not *sql.DB) so InitSchema can run it on the
-	// maintenance transaction whose statement_timeout has been disabled —
-	// the GIN build over a populated messages table can exceed the pool-wide
-	// 30s timeout on a large archive (finding S1).
-	EnsureFTSIndex(q querier) error
-
-	// EnsureTriggers idempotently creates the database-maintained triggers
-	// that bump messages.last_modified on any change to a message or its
-	// body row. Called by InitSchema after LegacyColumnMigrations (which add
-	// the last_modified column on legacy DBs), so the column is guaranteed
-	// present. SQLite is a no-op: its triggers are `CREATE TRIGGER IF NOT
-	// EXISTS` in schema.sql, re-exec'd idempotently by InitSchema. PostgreSQL
-	// creates them here because CREATE TRIGGER is not idempotent before PG14,
-	// so the impl wraps each in `DROP TRIGGER IF EXISTS ...; CREATE TRIGGER`.
-	//
-	// Takes a querier (not *sql.DB) so InitSchema can run it on the
-	// maintenance transaction (consistent with EnsureFTSIndex).
-	EnsureTriggers(q querier) error
-
 	// LegacyColumnMigrations returns ALTER TABLE ADD COLUMN statements to
 	// bring older databases up to date with schema columns added over time.
 	// Both dialects return the same logical list, translated to the
 	// dialect's column-type spellings. Statements are idempotent
 	// (`IF NOT EXISTS` on PG; IsDuplicateColumnError silences re-runs on
 	// SQLite). Fresh installs see no-op ALTERs because the columns are
-	// already present in schema.sql / schema_pg.sql.
+	// already present in schema.sql.
 	LegacyColumnMigrations() []ColumnMigration
 
 	// DatabaseSize returns the on-disk or logical size of the database in
@@ -275,22 +245,4 @@ type Dialect interface {
 	// to lock the matched row; SQLite already serializes writers under
 	// BEGIN IMMEDIATE and returns "".
 	SelectForUpdate() string
-
-	// MaintenanceTimeoutResetSQL returns a statement that disables any
-	// per-statement execution timeout for the remainder of the current
-	// transaction, or "" if the backend has no such timeout.
-	//
-	// PostgreSQL: "SET LOCAL statement_timeout = 0". The pool-wide 30s
-	// statement_timeout (postgresConnConfig) would otherwise cancel
-	// maintenance operations whose cost scales with archive size — cascade
-	// source deletes, FTS clear/backfill rewrites, GIN index builds, the
-	// attachment-dedup unique-index migration, and dedup cascade deletes —
-	// with SQLSTATE 57014 on a large archive. SET LOCAL applies only to the
-	// enclosing transaction and auto-resets at COMMIT/ROLLBACK, so it can
-	// never leak the GUC to another pooled connection (unlike a bare session
-	// SET). Callers MUST run this inside an explicit transaction.
-	//
-	// SQLite: "" (no statement_timeout concept). Store.runMaintenance skips
-	// the statement when this is empty, preserving SQLite behavior exactly.
-	MaintenanceTimeoutResetSQL() string
 }

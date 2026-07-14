@@ -10,28 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/mattn/go-sqlite3"
 )
 
-//go:embed schema.sql schema_sqlite.sql schema_pg.sql
+//go:embed schema.sql schema_sqlite.sql
 var schemaFS embed.FS
-
-// HNSWEfSearch is the per-connection value applied to pgvector's
-// hnsw.ef_search GUC (via RuntimeParams in postgresConnConfig). It must
-// be >= the largest inner ANN LIMIT the vector backend issues so the
-// HNSW index does not throttle the over-fetch below k. The fused ANN
-// path's inner LIMIT is (KPerSignal+1)*fusedANNChunksPerMessage ≈ 808 at
-// the default KPerSignal=100; 1000 covers that worst case with headroom
-// while keeping per-query latency bounded. The candidate-widening loop in
-// the pgvector backend can grow the inner LIMIT beyond this for
-// pathological multi-chunk corpora; in that regime recall is best-effort.
-const HNSWEfSearch = 1000
 
 // Store provides database operations for msgvault.
 //
@@ -46,7 +32,6 @@ type Store struct {
 	dialect       Dialect
 	readOnly      bool // Opened via OpenReadOnly; skips WAL checkpoint on close
 	fts5Available bool // Whether FTS5 is available for full-text search
-	closeCleanup  func()
 }
 
 // synchronous=FULL + fullfsync=true protects WAL writes against OS/power crashes
@@ -76,9 +61,11 @@ func isSQLiteError(err error, substr string) bool {
 	return false
 }
 
-// IsPostgresURL reports whether dbPath is a PostgreSQL connection URL.
-func IsPostgresURL(dbPath string) bool {
-	return strings.HasPrefix(dbPath, "postgresql://") || strings.HasPrefix(dbPath, "postgres://")
+func rejectDatabaseURL(dbPath string) error {
+	if strings.Contains(dbPath, "://") {
+		return errors.New("database URLs are not supported; use a local SQLite path")
+	}
+	return nil
 }
 
 // testSQLiteParams configures SQLite for ephemeral test databases: WAL mode
@@ -89,25 +76,22 @@ func IsPostgresURL(dbPath string) bool {
 // tests past their timing tripwires.
 const testSQLiteParams = "?_journal_mode=WAL&_busy_timeout=30000&_synchronous=OFF&_foreign_keys=ON"
 
-// Open opens or creates the database at the given path.
-// If dbPath is a postgres:// or postgresql:// URL, opens a PostgreSQL connection.
-// Otherwise, opens a SQLite database at the file path.
+// Open opens or creates the SQLite database at the given path.
 func Open(dbPath string) (*Store, error) {
-	if IsPostgresURL(dbPath) {
-		return openPostgres(dbPath)
+	if err := rejectDatabaseURL(dbPath); err != nil {
+		return nil, err
 	}
 	return openSQLite(dbPath, defaultSQLiteParams)
 }
 
-// OpenForTest opens or creates a database tuned for test use: ephemeral,
-// fast, with durability disabled. PostgreSQL URLs go through the normal
-// connection path (durability is a server-side concern there).
+// OpenForTest opens or creates a SQLite database tuned for test use:
+// ephemeral, fast, with durability disabled.
 //
 // Not for production use — a process crash mid-test can leave a corrupt
 // database, which is fine because tests recreate it from scratch.
 func OpenForTest(dbPath string) (*Store, error) {
-	if IsPostgresURL(dbPath) {
-		return openPostgres(dbPath)
+	if err := rejectDatabaseURL(dbPath); err != nil {
+		return nil, err
 	}
 	return openSQLite(dbPath, testSQLiteParams)
 }
@@ -158,46 +142,12 @@ func openSQLite(dbPath, params string) (*Store, error) {
 	}, nil
 }
 
-// openPostgres opens a PostgreSQL database using the given connection URL.
-func openPostgres(dbURL string) (*Store, error) {
-	db, cleanup, err := openPostgresDB(dbURL, false)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := db.PingContext(context.Background()); err != nil {
-		_ = db.Close()
-		cleanup()
-		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
-	}
-
-	// PostgreSQL supports full concurrency — use a larger pool than SQLite.
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	dialect := &PostgreSQLDialect{}
-	if err := dialect.InitConn(db); err != nil {
-		_ = db.Close()
-		cleanup()
-		return nil, fmt.Errorf("init PostgreSQL connection: %w", err)
-	}
-
-	return &Store{
-		db:           newLoggedDB(db, dialect.Rebind),
-		dbPath:       dbURL,
-		dialect:      dialect,
-		closeCleanup: cleanup,
-	}, nil
-}
-
 // OpenReadOnly opens an existing database in read-only mode. Suitable for
-// query-only workloads (MCP server) where multiple processes access the
-// same database concurrently. Does not create the database, run migrations,
-// or checkpoint WAL on close.
+// query-only workloads where multiple processes access the same database.
+// Does not create the database, run migrations, or checkpoint WAL on close.
 func OpenReadOnly(dbPath string) (*Store, error) {
-	if IsPostgresURL(dbPath) {
-		return openPostgresReadOnly(dbPath)
+	if err := rejectDatabaseURL(dbPath); err != nil {
+		return nil, err
 	}
 
 	if _, err := os.Stat(dbPath); err != nil {
@@ -242,103 +192,6 @@ func OpenReadOnly(dbPath string) (*Store, error) {
 	return s, nil
 }
 
-// openPostgresReadOnly opens a PostgreSQL database in read-only mode.
-//
-// Read-only enforcement uses pgx's RuntimeParams so that
-// default_transaction_read_only=on is sent in the startup packet of every
-// connection in the pool, not just the first one. Setting it via
-// `db.Exec("SET ...")` on a pooled *sql.DB only affects whichever connection
-// happened to serve the Exec — subsequent operations on a different pooled
-// connection would run as writable.
-func openPostgresReadOnly(dbURL string) (*Store, error) {
-	db, cleanup, err := openPostgresDB(dbURL, true)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := db.PingContext(context.Background()); err != nil {
-		_ = db.Close()
-		cleanup()
-		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
-	}
-
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	dialect := &PostgreSQLDialect{}
-	if err := dialect.InitConn(db); err != nil {
-		_ = db.Close()
-		cleanup()
-		return nil, fmt.Errorf("init PostgreSQL connection: %w", err)
-	}
-
-	s := &Store{
-		db:           newLoggedDB(db, dialect.Rebind),
-		dbPath:       dbURL,
-		dialect:      dialect,
-		readOnly:     true,
-		closeCleanup: cleanup,
-	}
-
-	s.fts5Available = dialect.FTSAvailable(db)
-
-	return s, nil
-}
-
-func postgresConnConfig(dbURL string, readOnly bool) (*pgx.ConnConfig, error) {
-	connConfig, err := pgx.ParseConfig(dbURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse PostgreSQL URL: %w", err)
-	}
-	if connConfig.RuntimeParams == nil {
-		connConfig.RuntimeParams = map[string]string{}
-	}
-	connConfig.RuntimeParams["statement_timeout"] = "30s"
-	// Raise pgvector's HNSW ef_search so the vector backend's over-fetch
-	// (inner ORDER BY <=> LIMIT) is not silently capped at the pgvector
-	// default of 40. The fused ANN path issues the largest inner LIMIT —
-	// (KPerSignal+1)*fusedANNChunksPerMessage, ≈808 at the default
-	// KPerSignal=100 — and Search over-fetches k*annOverFetchFactor; with
-	// ef_search=40 the HNSW index would return at most ~40 candidates and
-	// short-return below k on multi-chunk corpora. Sizing ef_search to
-	// HNSWEfSearch keeps the over-fetch design intact. Setting a GUC is not
-	// a data write, so this is safe even under default_transaction_read_only.
-	// Larger values raise per-query latency, so it is sized to the worst-case
-	// inner LIMIT for the default config rather than unboundedly.
-	connConfig.RuntimeParams["hnsw.ef_search"] = strconv.Itoa(HNSWEfSearch)
-	if readOnly {
-		connConfig.RuntimeParams["default_transaction_read_only"] = "on"
-	}
-	return connConfig, nil
-}
-
-func openPostgresDB(dbURL string, readOnly bool) (*sql.DB, func(), error) {
-	connConfig, err := postgresConnConfig(dbURL, readOnly)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	dsn := stdlib.RegisterConnConfig(connConfig)
-	cleanup := func() { stdlib.UnregisterConnConfig(dsn) }
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("open PostgreSQL: %w", err)
-	}
-	return db, cleanup, nil
-}
-
-// OpenPostgresDB opens a raw *sql.DB handle for the given PostgreSQL URL using
-// the same connection config (statement_timeout, runtime params) as Store.Open.
-// The returned cleanup func must be called when the handle is no longer needed.
-// Use this for lightweight consumers that only need the *sql.DB handle without
-// the full Store wrapper (e.g. embeddings metadata queries that live in the
-// same PG database as messages but do not need store-level operations).
-func OpenPostgresDB(dbURL string) (*sql.DB, func(), error) {
-	return openPostgresDB(dbURL, false)
-}
-
 // Close checkpoints the WAL (unless read-only) and closes the database.
 func (s *Store) Close() error {
 	if !s.readOnly {
@@ -347,18 +200,12 @@ func (s *Store) Close() error {
 		// reduces the risk of corruption from stale WAL entries.
 		_ = s.CheckpointWAL()
 	}
-	err := s.db.Close()
-	if s.closeCleanup != nil {
-		s.closeCleanup()
-		s.closeCleanup = nil
-	}
-	return err
+	return s.db.Close()
 }
 
 // CheckpointWAL forces a WAL checkpoint, folding the WAL back into the main
 // database file. Uses TRUNCATE mode which also resets the WAL file to zero
 // bytes. Returns nil on success; callers may log but should not fail on error.
-// No-op for non-SQLite backends.
 func (s *Store) CheckpointWAL() error {
 	return s.dialect.CheckpointWAL(s.db.DB)
 }
@@ -369,15 +216,8 @@ func (s *Store) DB() *sql.DB {
 }
 
 // BackupDatabase writes a point-in-time consistent copy of the SQLite database
-// to dst using VACUUM INTO. PostgreSQL deployments should be backed up with
-// pg_dump, pg_basebackup, or replication tooling outside msgvault.
+// to dst using VACUUM INTO.
 func (s *Store) BackupDatabase(dst string) error {
-	if s.IsPostgreSQL() {
-		return errors.New("backup-before-dedup is SQLite-only (uses VACUUM INTO); " +
-			"snapshot the PostgreSQL database with pg_dump out-of-band, " +
-			"then rerun with --no-backup",
-		)
-	}
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("backup target already exists: %s", dst)
 	}
@@ -385,13 +225,6 @@ func (s *Store) BackupDatabase(dst string) error {
 		return fmt.Errorf("vacuum into %s: %w", dst, err)
 	}
 	return nil
-}
-
-// IsPostgreSQL reports whether this store is backed by PostgreSQL.
-// Engine factories use this to choose between the SQLite and PostgreSQL
-// query paths.
-func (s *Store) IsPostgreSQL() bool {
-	return s.dialect.DriverName() == "pgx"
 }
 
 // WithExclusiveLock executes fn while holding an exclusive write lock on the
@@ -404,11 +237,7 @@ func (s *Store) IsPostgreSQL() bool {
 //
 // fn must NOT write through the store. The EXCLUSIVE lock is held on a
 // dedicated connection (conn below), while every store write goes to the
-// pool — a *different* connection. On PostgreSQL the EXCLUSIVE lock conflicts
-// with the ROW EXCLUSIVE lock any INSERT/UPDATE/DELETE acquires, so a write
-// issued from fn would block on the pool waiting for a lock this same call is
-// holding, deadlocking until statement_timeout cancels it. fn is for reads
-// (ACCESS SHARE, which EXCLUSIVE permits) plus filesystem work only.
+// pool — a different connection. fn is for reads plus filesystem work only.
 func (s *Store) WithExclusiveLock(ctx context.Context, fn func() error) error {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -485,26 +314,7 @@ func (s *Store) withTx(fn func(tx *loggedTx) error) error {
 	return nil
 }
 
-// runMaintenance runs fn inside a single transaction with the per-statement
-// execution timeout disabled (finding S1). It is the one chokepoint for
-// maintenance operations whose cost scales with archive size — cascade source
-// deletes, FTS clear/backfill rewrites, GIN index builds, the attachment-dedup
-// unique-index migration — which would otherwise be cancelled by the pool-wide
-// 30s statement_timeout (postgresConnConfig) with SQLSTATE 57014 on a large
-// archive.
-//
-// On PostgreSQL the first statement issued on the transaction is
-// `SET LOCAL statement_timeout = 0`; SET LOCAL auto-resets at COMMIT/ROLLBACK,
-// so the disabled timeout is scoped to this transaction and can never leak to
-// another pooled connection. On SQLite MaintenanceTimeoutResetSQL is "" so no
-// reset statement runs, and fn simply executes inside an ordinary transaction —
-// SQLite has no statement_timeout, so behavior is unchanged. The reset and all
-// of fn's statements run on the SAME tx (one connection), which is required for
-// SET LOCAL to take effect.
-//
-// fn receives a *loggedTx, so its Exec/Query calls are Rebind-translated
-// (? → $N on PG) just like withTx. The reset statement itself has no
-// placeholders, so Rebind is a no-op on it.
+// runMaintenance runs archive-scale maintenance inside one transaction.
 func (s *Store) runMaintenance(ctx context.Context, fn func(ctx context.Context, tx *loggedTx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -516,12 +326,6 @@ func (s *Store) runMaintenance(ctx context.Context, fn func(ctx context.Context,
 			_ = tx.Rollback()
 		}
 	}()
-
-	if reset := s.dialect.MaintenanceTimeoutResetSQL(); reset != "" {
-		if _, err := tx.ExecContext(ctx, reset); err != nil {
-			return fmt.Errorf("disable maintenance statement timeout: %w", err)
-		}
-	}
 
 	if err := fn(ctx, tx); err != nil {
 		return err
@@ -761,7 +565,7 @@ func (s *Store) InitSchema() error {
 			if !s.dialect.IsDuplicateColumnError(err) {
 				return fmt.Errorf("migrate schema (%s): %w", m.Desc, err)
 			}
-		} else if m.Desc == "last_modified" && !s.IsPostgreSQL() {
+		} else if m.Desc == "last_modified" {
 			lastModifiedColumnAdded = true
 		}
 	}
@@ -776,52 +580,37 @@ func (s *Store) InitSchema() error {
 	// index and lets the page query walk it in order and stop at LIMIT,
 	// eliminating both the full scan and the sort (~29x faster COUNT, no sort).
 	//
-	// Runs after the legacy ADD COLUMN loop above so deleted_at /
-	// deleted_from_source_at exist on upgraded DBs. SQLite only: PostgreSQL
-	// autovacuum keeps planner statistics current and picks its own plan, and
-	// the index expression syntax differs; the measured regression is specific
-	// to the statistics-free SQLite archive. Built under runMaintenance so the
-	// one-time index build over a large table is not cut off by the pool-wide
-	// 30s statement_timeout (finding S1). IF NOT EXISTS is idempotent per start.
-	if !s.IsPostgreSQL() {
-		if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-			_, err := tx.ExecContext(ctx, `
-				CREATE INDEX IF NOT EXISTS idx_messages_live_sent_at
-				    ON messages(COALESCE(sent_at, received_at, internal_date) DESC, id DESC)
-				    WHERE deleted_at IS NULL AND deleted_from_source_at IS NULL
-			`)
-			return err
-		}); err != nil {
-			return fmt.Errorf("create idx_messages_live_sent_at: %w", err)
-		}
+	// Runs after the legacy ADD COLUMN loop so deleted_at and
+	// deleted_from_source_at exist on upgraded databases.
+	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
+		_, err := tx.ExecContext(ctx, `
+			CREATE INDEX IF NOT EXISTS idx_messages_live_sent_at
+			    ON messages(COALESCE(sent_at, received_at, internal_date) DESC, id DESC)
+			    WHERE deleted_at IS NULL AND deleted_from_source_at IS NULL
+		`)
+		return err
+	}); err != nil {
+		return fmt.Errorf("create idx_messages_live_sent_at: %w", err)
+	}
 
-		// Partial indexes over the deletion timestamps. The analytics cache
-		// staleness check (cacheNeedsBuild) counts messages source-deleted or
-		// dedup-hidden since the last build on every daemon start, before the
-		// API server binds. Neither predicate is served by an existing index
-		// (idx_messages_deleted leads with source_id), so each COUNT was a
-		// full scan of the messages table — measured at ~4.5s on a cold page
-		// cache over a 2.5M-row archive, which was the entire cold-start
-		// latency of `msgvault search`. The partial form keeps the indexes
-		// proportional to the deleted rows only, so live-message insert and
-		// update paths pay no maintenance for them.
-		if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-			if _, err := tx.ExecContext(ctx, `
-				CREATE INDEX IF NOT EXISTS idx_messages_deleted_from_source_at
-				    ON messages(deleted_from_source_at)
-				    WHERE deleted_from_source_at IS NOT NULL
-			`); err != nil {
-				return err
-			}
-			_, err := tx.ExecContext(ctx, `
-				CREATE INDEX IF NOT EXISTS idx_messages_deleted_at
-				    ON messages(deleted_at)
-				    WHERE deleted_at IS NOT NULL
-			`)
+	// Keep tombstone and dedup-hidden counts proportional to deleted rows
+	// instead of scanning the full archive.
+	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
+		if _, err := tx.ExecContext(ctx, `
+			CREATE INDEX IF NOT EXISTS idx_messages_deleted_from_source_at
+			    ON messages(deleted_from_source_at)
+			    WHERE deleted_from_source_at IS NOT NULL
+		`); err != nil {
 			return err
-		}); err != nil {
-			return fmt.Errorf("create deletion timestamp indexes: %w", err)
 		}
+		_, err := tx.ExecContext(ctx, `
+			CREATE INDEX IF NOT EXISTS idx_messages_deleted_at
+			    ON messages(deleted_at)
+			    WHERE deleted_at IS NOT NULL
+		`)
+		return err
+	}); err != nil {
+		return fmt.Errorf("create deletion timestamp indexes: %w", err)
 	}
 
 	// Backfill last_modified for rows that predate the column. SQLite cannot
@@ -854,31 +643,6 @@ func (s *Store) InitSchema() error {
 		if err := s.MarkMigrationApplied(migrationMessagesLastModifiedBackfill); err != nil {
 			return err
 		}
-	}
-
-	// Create FTS indexes that depend on columns just added by the legacy
-	// migrations (PostgreSQL's GIN index on messages.search_fts). No-op on
-	// SQLite. Must run after the migration loop above. [cr2-10]
-	//
-	// Run under runMaintenance: the GIN build over a populated messages
-	// table can exceed the pool-wide 30s statement_timeout on a large
-	// archive, so the maintenance hatch disables it for this tx (finding
-	// S1). No-op timeout reset on SQLite.
-	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		return s.dialect.EnsureFTSIndex(tx)
-	}); err != nil {
-		return fmt.Errorf("ensure FTS index: %w", err)
-	}
-
-	// Create the last_modified maintenance triggers. Must run after the
-	// migration loop above adds the last_modified column on legacy DBs.
-	// SQLite is a no-op here (its triggers ride schema.sql); PostgreSQL
-	// creates them idempotently. Run under runMaintenance for consistency
-	// with EnsureFTSIndex (no statement_timeout cap on the DDL).
-	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		return s.dialect.EnsureTriggers(tx)
-	}); err != nil {
-		return fmt.Errorf("ensure last_modified triggers: %w", err)
 	}
 
 	// Drop the obsolete partial index over messages needing embedding. It was

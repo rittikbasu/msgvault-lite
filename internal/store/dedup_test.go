@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/store"
-	"go.kenn.io/msgvault/internal/testutil"
 	"go.kenn.io/msgvault/internal/testutil/storetest"
 )
 
@@ -197,7 +196,7 @@ func TestStore_BackfillRFC822IDs_ParsesFromRawMIME(t *testing.T) {
 
 func TestStore_BackfillRFC822IDs_DoesNotOvercountRolledBackBatch(t *testing.T) {
 	require := require.New(t)
-	testutil.SkipIfPostgres(t, "uses SQLite-specific CREATE TRIGGER ... NEW.* / RAISE(FAIL,...) syntax to force a mid-batch rollback")
+
 	f := storetest.New(t)
 
 	idA := newRFC822Message(t, f, "needs-backfill-a", "")

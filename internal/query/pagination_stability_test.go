@@ -21,9 +21,6 @@ import (
 // sharing an identical timestamp had an undefined relative order and the
 // same id could appear on two adjacent pages (or be skipped entirely) under
 // LIMIT/OFFSET. The m.id DESC tiebreaker makes pagination deterministic.
-//
-// Runs on whichever backend testutil.NewTestStore selects; setting
-// MSGVAULT_TEST_DB to a postgres:// DSN exercises the PG path too.
 const paginationStabilityN = 3
 const paginationStabilitySubjectTag = "pagestable"
 

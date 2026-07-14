@@ -1,9 +1,7 @@
 package store_test
 
 import (
-	"os"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,21 +10,8 @@ import (
 	"go.kenn.io/msgvault/internal/testutil/storetest"
 )
 
-// isPostgresTestDB reports whether the active test backend is PostgreSQL,
-// inferred from MSGVAULT_TEST_DB. Used by backend-portable tests that must issue
-// dialect-specific SQL to set up a scenario (e.g. punching a hole in the FTS
-// index differs between SQLite's messages_fts shadow table and PG's search_fts
-// column).
-func isPostgresTestDB() bool {
-	db := os.Getenv("MSGVAULT_TEST_DB")
-	return strings.HasPrefix(db, "postgres://") || strings.HasPrefix(db, "postgresql://")
-}
-
-// TestStore_NeedsFTSBackfill_Transition (finding for P2) verifies the
-// FTSNeedsBackfill contract on BOTH backends: it reports true while any message
-// lacks an FTS entry and false once backfill has populated them all. On
-// PostgreSQL the probe is the EXISTS(search_fts IS NULL) short-circuit; on
-// SQLite it is the MAX(rowid) vs MAX(id) comparison. Both must agree.
+// TestStore_NeedsFTSBackfill_Transition verifies that the full probe reports
+// true while any message lacks an FTS entry and false after backfill.
 func TestStore_NeedsFTSBackfill_Transition(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -51,10 +36,9 @@ func TestStore_NeedsFTSBackfill_Transition(t *testing.T) {
 		"NeedsFTSBackfill must be false after a complete backfill")
 }
 
-// TestStore_NeedsFTSBackfillQuick_Transition verifies the cheap probe's
-// contract on both backends: true while the index tail is unindexed, false
-// once backfill completes. (Interior holes are explicitly out of contract on
-// SQLite — the full NeedsFTSBackfill anti-join is authoritative for those.)
+// TestStore_NeedsFTSBackfillQuick_Transition verifies the cheap probe: true
+// while the index tail is unindexed, false once backfill completes. Interior
+// holes remain out of contract; the full anti-join is authoritative for them.
 func TestStore_NeedsFTSBackfillQuick_Transition(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -78,14 +62,11 @@ func TestStore_NeedsFTSBackfillQuick_Transition(t *testing.T) {
 }
 
 // TestStore_NeedsFTSBackfill_HoleAtLowestID (F4) verifies that a hole left at a
-// LOW id while later ids are indexed is detected on BOTH backends. This is the
+// LOW id while later ids are indexed is detected. This is the
 // case the old SQLite MAX(rowid)-vs-MAX(id) heuristic missed: the FTS MAX still
 // equals the messages MAX, so it reported "no backfill needed" even though id 1
 // was unindexed. Holes are reachable in practice because UpsertFTS failures
 // during sync are warn-and-continue while the message row still commits.
-//
-// Runs on both backends; before the fix this passed on PG (EXISTS probe) and
-// failed on SQLite, proving the divergence.
 func TestStore_NeedsFTSBackfill_HoleAtLowestID(t *testing.T) {
 	require := require.New(t)
 	f := storetest.New(t)
@@ -105,13 +86,8 @@ func TestStore_NeedsFTSBackfill_HoleAtLowestID(t *testing.T) {
 	// Remove the FTS entry for the LOWEST id only. The highest id stays indexed,
 	// so any MAX-based heuristic would wrongly report "complete".
 	lowest := slices.Min(ids)
-	if isPostgresTestDB() {
-		_, err = f.Store.DB().Exec(
-			"UPDATE messages SET search_fts = NULL WHERE id = $1", lowest)
-	} else {
-		_, err = f.Store.DB().Exec(
-			"DELETE FROM messages_fts WHERE rowid = ?", lowest)
-	}
+	_, err = f.Store.DB().Exec(
+		"DELETE FROM messages_fts WHERE rowid = ?", lowest)
 	require.NoError(err, "punch a hole at the lowest id")
 
 	assert.True(t, f.Store.NeedsFTSBackfill(),

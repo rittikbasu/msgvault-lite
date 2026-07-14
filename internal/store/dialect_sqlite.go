@@ -15,8 +15,6 @@ import (
 // SQLiteDialect implements Dialect for SQLite (the default backend).
 type SQLiteDialect struct{}
 
-func (d *SQLiteDialect) DriverName() string { return "sqlite3" }
-
 // Rebind is a no-op for SQLite — it uses ? placeholders natively.
 func (d *SQLiteDialect) Rebind(query string) string { return query }
 
@@ -45,8 +43,7 @@ func (d *SQLiteDialect) JSONBindExpr() string { return "?" }
 // tokenizer (no Unicode letter or digit — e.g. "!!!", "---", "") are
 // dropped. If all terms drop, returns "" so the caller can
 // short-circuit instead of dispatching a malformed FTS5 MATCH that
-// errors at the driver. Mirrors the empty-fallback shape in
-// PostgreSQLDialect.BuildFTSArg.
+// errors at the driver.
 func (d *SQLiteDialect) BuildFTSArg(terms []string) string {
 	quoted := make([]string, 0, len(terms))
 	for _, t := range terms {
@@ -240,16 +237,6 @@ func (d *SQLiteDialect) FTSRebuildSchema(q querier) error {
 	return nil
 }
 
-// EnsureFTSIndex is a no-op for SQLite: its messages_fts virtual table (and
-// the index it implies) is created via the SchemaFTS file during InitSchema,
-// not a post-migration step (cr2-10).
-func (d *SQLiteDialect) EnsureFTSIndex(querier) error { return nil }
-
-// EnsureTriggers is a no-op for SQLite: the last_modified triggers are
-// `CREATE TRIGGER IF NOT EXISTS` in schema.sql, which InitSchema re-execs
-// idempotently on every open (fresh and existing DBs alike).
-func (d *SQLiteDialect) EnsureTriggers(querier) error { return nil }
-
 // LegacyColumnMigrations returns the ALTER TABLE ADD COLUMN statements that
 // bring older SQLite databases up to the current schema. IsDuplicateColumnError
 // silences these when the column already exists (idempotent migrations).
@@ -368,11 +355,6 @@ func (d *SQLiteDialect) BeginWriteSQL() string { return "BEGIN IMMEDIATE" }
 // SelectForUpdate returns "" — SQLite has no FOR UPDATE; serialization
 // comes from BEGIN IMMEDIATE.
 func (d *SQLiteDialect) SelectForUpdate() string { return "" }
-
-// MaintenanceTimeoutResetSQL returns "" — SQLite has no statement_timeout,
-// so Store.runMaintenance issues no reset statement and SQLite's
-// transactional behavior is unchanged.
-func (d *SQLiteDialect) MaintenanceTimeoutResetSQL() string { return "" }
 
 // IsBusyError returns true for SQLITE_BUSY and SQLITE_LOCKED. Matching on
 // the result code is more robust than substring matching: BUSY surfaces as

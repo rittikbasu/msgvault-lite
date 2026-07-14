@@ -15,9 +15,7 @@ import (
 	"go.kenn.io/msgvault/internal/store"
 )
 
-// SQLiteEngine implements Engine using direct SQL queries.
-// Despite its name, it is dialect-agnostic and supports both SQLite
-// (default) and PostgreSQL via the dialect field.
+// SQLiteEngine executes queries against the msgvault SQLite database.
 type SQLiteEngine struct {
 	db      *sql.DB
 	dialect Dialect
@@ -35,9 +33,7 @@ func NewSQLiteEngine(db *sql.DB) *SQLiteEngine {
 }
 
 // NewEngineWithDialect creates a query engine with an explicit dialect.
-// Use this to construct a PostgreSQL-backed engine:
-//
-//	engine := query.NewEngineWithDialect(db, query.PostgreSQLQueryDialect{})
+// It exists for tests that inject FTS availability failures.
 func NewEngineWithDialect(db *sql.DB, d Dialect) *SQLiteEngine {
 	return &SQLiteEngine{db: db, dialect: d}
 }

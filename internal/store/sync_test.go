@@ -36,7 +36,6 @@ func TestScanSource_NullLastSyncAt_Valid(t *testing.T) {
 // The driver converts unparseable DATETIME values to "0001-01-01T00:00:00Z".
 func TestScanSyncRun_ZeroTime(t *testing.T) {
 	require := require.New(t)
-	testutil.SkipIfPostgres(t, "tests go-sqlite3 driver normalization of invalid DATETIME strings to zero time; PG TIMESTAMPTZ rejects invalid strings outright")
 	f := storetest.New(t)
 
 	syncID := f.StartSync()
@@ -62,7 +61,6 @@ func TestScanSyncRun_ZeroTime(t *testing.T) {
 // normalizes to zero time are handled correctly.
 func TestScanSource_ZeroTime(t *testing.T) {
 	require := require.New(t)
-	testutil.SkipIfPostgres(t, "tests go-sqlite3 driver normalization of invalid DATETIME strings to zero time; PG TIMESTAMPTZ rejects invalid strings outright")
 	st := testutil.NewTestStore(t)
 
 	// Create a source

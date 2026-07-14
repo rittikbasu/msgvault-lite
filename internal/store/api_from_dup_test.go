@@ -29,9 +29,6 @@ import (
 // a message with two distinct 'from' rows appeared TWICE in the result page
 // (displacing another message and disagreeing with the distinct COUNT(*)). The
 // fix joins on the single chosen from-row id so at most one mr row matches.
-//
-// Runs on whichever backend testutil.NewTestStore selects; a postgres:// DSN in
-// MSGVAULT_TEST_DB exercises the PG path as well as SQLite.
 func TestStoreAPI_MultipleFromRows_NoDuplication(t *testing.T) {
 	require := require.New(t)
 	st := testutil.NewTestStore(t)

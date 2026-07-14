@@ -123,46 +123,37 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	// Run SQLite integrity check before any Gmail work. Users with a
-	// corrupt database should see the repair hint even if their OAuth
-	// token is expired or the network is down. PostgreSQL has no
-	// in-engine integrity_check; print a notice so users know the
-	// check was skipped intentionally and point them at the right
-	// out-of-band tool.
+	// Run SQLite integrity_check before any Gmail work. Users with a corrupt
+	// database should see the repair hint even if OAuth or the network fails.
 	var dbCorrupt bool
 	var dbIntegrityOK *bool
 	if !verifySkipDBCheck {
-		if s.IsPostgreSQL() {
-			emitln("Skipping database integrity check (PostgreSQL — use pg_amcheck out-of-band).")
-			emitln()
-		} else {
-			emitln("Running database integrity check...")
-			integrityErrors, err := runIntegrityCheck(s)
-			if err != nil {
-				return fmt.Errorf("integrity check failed: %w", err)
-			}
-			if len(integrityErrors) == 0 {
-				ok := true
-				dbIntegrityOK = &ok
-				emitln("  Database integrity: OK")
-			} else {
-				dbCorrupt = true
-				ok := false
-				dbIntegrityOK = &ok
-				emitf("  Database integrity: FAILED (%d errors)\n", len(integrityErrors))
-				for i, ie := range integrityErrors {
-					if i >= 10 {
-						emitf("  ... and %d more errors\n", len(integrityErrors)-10)
-						break
-					}
-					emitf("  - %s\n", ie)
-				}
-				if !verifyJSON {
-					printIntegrityRecoveryHint(integrityErrors)
-				}
-			}
-			emitln()
+		emitln("Running database integrity check...")
+		integrityErrors, err := runIntegrityCheck(s)
+		if err != nil {
+			return fmt.Errorf("integrity check failed: %w", err)
 		}
+		if len(integrityErrors) == 0 {
+			ok := true
+			dbIntegrityOK = &ok
+			emitln("  Database integrity: OK")
+		} else {
+			dbCorrupt = true
+			ok := false
+			dbIntegrityOK = &ok
+			emitf("  Database integrity: FAILED (%d errors)\n", len(integrityErrors))
+			for i, ie := range integrityErrors {
+				if i >= 10 {
+					emitf("  ... and %d more errors\n", len(integrityErrors)-10)
+					break
+				}
+				emitf("  - %s\n", ie)
+			}
+			if !verifyJSON {
+				printIntegrityRecoveryHint(integrityErrors)
+			}
+		}
+		emitln()
 	}
 
 	// Look up source to get OAuth app binding
@@ -390,16 +381,7 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 
 // runIntegrityCheck runs PRAGMA integrity_check on the database and returns
 // any error strings. An empty slice means the database is healthy.
-//
-// PostgreSQL has no in-engine analogue; its corruption checks live in
-// external admin tooling (pg_amcheck, pg_dump --section=data) that
-// require server-side privileges this CLI does not assume. On PG we
-// return no errors so the rest of `verify` (Gmail message round-trip)
-// still runs — the user is expected to monitor PG health separately.
 func runIntegrityCheck(s *store.Store) ([]string, error) {
-	if s.IsPostgreSQL() {
-		return nil, nil
-	}
 	rows, err := s.DB().Query("PRAGMA integrity_check(100)")
 	if err != nil {
 		return nil, err

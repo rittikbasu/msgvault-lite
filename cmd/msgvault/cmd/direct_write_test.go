@@ -28,21 +28,6 @@ func withStoreResolverConfig(t *testing.T, c *config.Config) {
 	})
 }
 
-func TestAcquireDirectSQLiteWriteLockSkipsPostgreSQL(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := directWriteTestConfig(dataDir)
-	cfg.Data.DatabaseURL = "postgres://user:***@example.com:5432/msgvault"
-
-	owner, err := tryAcquireWriteOwnerLock(dataDir)
-	require.NoError(t, err, "pre-acquire sqlite lock")
-	t.Cleanup(func() { _ = owner.Close() })
-
-	release, err := acquireDirectSQLiteWriteLock(cfg)
-	require.NoError(t, err, "postgres direct writer should not use sqlite flock")
-	require.NotNil(t, release, "release")
-	release()
-}
-
 func TestAcquireDirectSQLiteWriteLockHoldsThenReleases(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := directWriteTestConfig(dataDir)

@@ -1,29 +1,16 @@
-// Package query - database dialect abstraction for query engine.
-//
-// The query engine uses a small dialect interface to handle SQLite vs.
-// PostgreSQL differences that surface in aggregate/search SQL:
-//   - ? vs $N placeholder syntax (Rebind)
-//   - strftime vs to_char for time truncation
-//   - messages_fts MATCH vs tsvector @@ for full-text search
-//   - sqlite_master vs information_schema for existence probes
-//
-// The store package has a richer Dialect interface for its own needs;
-// this package maintains a minimal parallel abstraction to avoid a
-// cross-package dependency.
+// Package query provides direct SQLite archive queries.
 
 package query
 
 import (
 	"fmt"
 	"strings"
-
-	"go.kenn.io/msgvault/internal/sqldialect"
 )
 
-// Dialect abstracts SQL generation differences for SQLite vs PostgreSQL.
+// Dialect isolates SQLite SQL generation so FTS fallback behavior can be
+// exercised with test doubles.
 type Dialect interface {
-	// Rebind converts ? placeholders to the driver's native form.
-	// No-op for SQLite; converts to $1, $2, ... for PostgreSQL.
+	// Rebind converts placeholders to the driver's native form.
 	Rebind(query string) string
 
 	// TimeTruncExpression returns SQL to truncate a timestamp column to a
@@ -32,8 +19,7 @@ type Dialect interface {
 	TimeTruncExpression(column string, granularity string) string
 
 	// FTSSearchExpression returns the SQL boolean expression (with a ?
-	// placeholder for the search term) to use in a WHERE clause for
-	// full-text search. SQLite: messages_fts MATCH; PostgreSQL: tsvector @@.
+	// placeholder for the search term) to use in a WHERE clause.
 	FTSSearchExpression() string
 
 	// HasFTSTableSQL returns SQL to probe whether the FTS index exists.
@@ -53,20 +39,13 @@ type Dialect interface {
 	// back to LIKE instead of erroring. This mirrors the store dialect's
 	// FTSAvailable contract (internal/store/dialect_sqlite.go).
 	//
-	// PostgreSQL returns "" — its HasFTSTableSQL information_schema column
-	// probe is an authoritative metadata check (the tsvector column either
-	// exists and is queryable or it does not), so no extra liveness query
-	// is needed.
 	FTSLivenessSQL() string
 
 	// FTSJoin returns a JOIN clause that must be added to the FROM clause
-	// when using FTSSearchExpression. Empty string if no join is needed
-	// (PostgreSQL has the tsvector column on messages directly).
+	// when using FTSSearchExpression.
 	FTSJoin() string
 
-	// BuildFTSTerm converts a slice of user-supplied search terms into a SQL
-	// expression and a single argument string. Both SQLite FTS5 and PostgreSQL
-	// tsquery support prefix matching via dialect-appropriate syntax.
+	// BuildFTSTerm converts user terms into an FTS5 expression and argument.
 	BuildFTSTerm(terms []string) (expr string, arg string)
 
 	// SanitizeFTSQuery converts a raw user search string to a form safe to
@@ -74,10 +53,7 @@ type Dialect interface {
 	// sanitization (caller should treat as no-match).
 	SanitizeFTSQuery(query string) string
 
-	// BoolTrueExpr returns a SQL boolean expression that is true when col
-	// holds a "true" value. SQLite stores booleans as 0/1 INTEGER so we
-	// must emit "col = 1"; PostgreSQL has a real BOOLEAN type and rejects
-	// integer comparisons, so the bare column name is the right form.
+	// BoolTrueExpr returns a SQL expression that is true when col is 1.
 	BoolTrueExpr(col string) string
 }
 
@@ -148,94 +124,4 @@ func (SQLiteQueryDialect) SanitizeFTSQuery(query string) string {
 		return ""
 	}
 	return `"` + clean + `"*`
-}
-
-// PostgreSQLQueryDialect implements Dialect for PostgreSQL.
-type PostgreSQLQueryDialect struct{}
-
-// Rebind converts ? placeholders to $1, $2, ... for PostgreSQL.
-// Delegates to sqldialect so store.PostgreSQLDialect.Rebind stays in
-// lockstep — divergence here would route the same query to two
-// different rebinds depending on which package owns the call site.
-func (PostgreSQLQueryDialect) Rebind(query string) string {
-	return sqldialect.RebindPostgreSQL(query)
-}
-
-func (PostgreSQLQueryDialect) BoolTrueExpr(col string) string { return col }
-
-func (PostgreSQLQueryDialect) TimeTruncExpression(column string, granularity string) string {
-	switch granularity {
-	case "year":
-		return fmt.Sprintf("to_char(%s AT TIME ZONE 'UTC', 'YYYY')", column)
-	case "month":
-		return fmt.Sprintf("to_char(%s AT TIME ZONE 'UTC', 'YYYY-MM')", column)
-	case "day":
-		return fmt.Sprintf("to_char(%s AT TIME ZONE 'UTC', 'YYYY-MM-DD')", column)
-	default:
-		return fmt.Sprintf("to_char(%s AT TIME ZONE 'UTC', 'YYYY-MM')", column)
-	}
-}
-
-// FTSSearchExpression uses to_tsquery (not plainto_tsquery) so the
-// bound argument can carry prefix-match operators ("invo:*" matches
-// "invoice"); BuildFTSTerm and SanitizeFTSQuery both emit arguments in
-// that shape, and the store dialect's FTSSearchClause does the same.
-// Keeping all three aligned prevents the next caller from binding a
-// :*-shaped argument into plainto_tsquery and silently getting a
-// literal-phrase match.
-func (PostgreSQLQueryDialect) FTSSearchExpression() string {
-	return "m.search_fts @@ to_tsquery('simple', ?)"
-}
-
-func (PostgreSQLQueryDialect) HasFTSTableSQL() string {
-	// Scope to the connection's current schema (matching the store dialect's
-	// postgresColumnExistsSQL). Without this, a schema-scoped connection would
-	// falsely report FTS available because a sibling schema happens to have a
-	// messages.search_fts column, then fail the actual search with
-	// "column m.search_fts does not exist". [cr2-8]
-	return `SELECT COUNT(*) FROM information_schema.columns
-		WHERE table_schema = current_schema()
-		  AND table_name = 'messages' AND column_name = 'search_fts'`
-}
-
-// FTSLivenessSQL is empty for PostgreSQL: the information_schema column
-// probe in HasFTSTableSQL is already authoritative, and there is no
-// messages_fts relation to probe (PG uses an inline search_fts tsvector
-// column). Returning "" keeps the SQLite-only liveness query off the PG path.
-func (PostgreSQLQueryDialect) FTSLivenessSQL() string { return "" }
-
-// FTSJoin: PostgreSQL's tsvector column lives on messages — no join needed.
-func (PostgreSQLQueryDialect) FTSJoin() string { return "" }
-
-// BuildFTSTerm for PostgreSQL to_tsquery: tokenize each user term into
-// letter/digit-only lexemes via sqldialect.EscapeTSQueryTerm (shared
-// with store.PostgreSQLDialect) so punctuation like `-`, `.`, `@`
-// becomes a lexeme boundary rather than ending up in an invalid
-// tsquery, append :* for prefix match, AND lexemes with " & ".
-func (PostgreSQLQueryDialect) BuildFTSTerm(terms []string) (expr string, arg string) {
-	tsTerms := make([]string, 0, len(terms))
-	for _, term := range terms {
-		for _, lex := range sqldialect.EscapeTSQueryTerm(term) {
-			tsTerms = append(tsTerms, lex+":*")
-		}
-	}
-	if len(tsTerms) == 0 {
-		return "FALSE", ""
-	}
-	return "m.search_fts @@ to_tsquery('simple', ?)", strings.Join(tsTerms, " & ")
-}
-
-// SanitizeFTSQuery builds a tsquery arg from a single user string using the
-// allowlist tokenizer sqldialect.EscapeTSQueryTerm: the input is split on every
-// rune that isn't a Unicode letter or digit, and each resulting lexeme is
-// suffixed with ":*" for prefix matching and joined with " & ". This mirrors
-// BuildFTSTerm exactly so both PG FTS paths emit the same lexeme set, and
-// guarantees no tsquery metacharacter (`<`, `=`, `&`, etc.) ever reaches
-// to_tsquery. Returns "" if the input collapses to nothing usable.
-func (PostgreSQLQueryDialect) SanitizeFTSQuery(query string) string {
-	var parts []string
-	for _, lex := range sqldialect.EscapeTSQueryTerm(query) {
-		parts = append(parts, lex+":*")
-	}
-	return strings.Join(parts, " & ")
 }

@@ -93,15 +93,8 @@ func (s *Store) MessageExistsBatch(sourceID int64, sourceMessageIDs []string) (m
 	return result, nil
 }
 
-// SetMessageMetadata writes the messages.metadata JSON/JSONB column for an
-// already-persisted message. The column exists in both dialects (schema.sql:
-// `metadata JSON`, schema_pg.sql: `metadata JSONB`) but the hot upsertMessageSQL
-// path never writes it, so non-email importers that need structured per-message
-// metadata (e.g. calendar events: end/all_day/status/recurrence) call this
-// immediately after UpsertMessage returns the id. Passing an invalid
-// sql.NullString writes SQL NULL, clearing the column. The dialect supplies the
-// JSONB cast on PG (?::JSONB) and a bare ? on SQLite, so a JSON string binds in
-// both backends.
+// SetMessageMetadata writes the messages.metadata JSON column for an
+// already-persisted message. Passing an invalid sql.NullString clears it.
 func (s *Store) SetMessageMetadata(messageID int64, metadata sql.NullString) error {
 	_, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE messages
@@ -319,10 +312,7 @@ func upsertMessageSQL(id, now string) string {
 // range whose deleted high-water mark is unknowable. Unix milliseconds remain
 // exactly representable by JavaScript numbers while dwarfing plausible message
 // counts; MAX(id)+1 preserves monotonicity once the archive reaches that floor.
-func nextMessageIDSQL(d Dialect) string {
-	if d.DriverName() != "sqlite3" {
-		return "DEFAULT"
-	}
+func nextMessageIDSQL() string {
 	return `(SELECT MAX(
 		COALESCE(MAX(id) + 1, 1),
 		CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -335,7 +325,7 @@ func (s *Store) UpsertMessage(msg *Message) (int64, error) {
 }
 
 func upsertMessageWith(q querier, d Dialect, msg *Message) (int64, error) {
-	sql := upsertMessageSQL(nextMessageIDSQL(d), d.Now())
+	sql := upsertMessageSQL(nextMessageIDSQL(), d.Now())
 	args := []any{
 		msg.ConversationID, msg.SourceID, msg.SourceMessageID,
 		msg.RFC822MessageID, msg.MessageType,

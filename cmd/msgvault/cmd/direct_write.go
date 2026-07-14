@@ -9,8 +9,7 @@ import (
 )
 
 // acquireDirectSQLiteWriteLock claims the cross-process write-owner lock on
-// behalf of a direct (non-daemon) CLI writer using the local SQLite archive.
-// PostgreSQL deployments do not use this local filesystem lock. On success it
+// behalf of a direct CLI writer using the local SQLite archive. On success it
 // returns a release func that the caller must defer. When the SQLite archive is
 // already owned it returns an actionable error instead of silently contending on
 // the database file.
@@ -20,9 +19,6 @@ import (
 func acquireDirectSQLiteWriteLock(cfg *config.Config) (func(), error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
-	}
-	if store.IsPostgresURL(cfg.DatabaseDSN()) {
-		return func() {}, nil
 	}
 	lock, err := tryAcquireWriteOwnerLock(cfg.Data.DataDir)
 	if err != nil {

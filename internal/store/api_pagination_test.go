@@ -23,9 +23,6 @@ import (
 // Before the tiebreaker, rows sharing an identical sent_at had an undefined
 // relative order, so LIMIT/OFFSET pagination could drop or duplicate the same
 // id across adjacent pages. The m.id DESC tiebreaker makes paging deterministic.
-//
-// Runs on whichever backend testutil.NewTestStore selects; a postgres:// DSN in
-// MSGVAULT_TEST_DB exercises the PG path (the engine the Q2 fix did not touch).
 func TestStoreAPI_PaginationStability_IdenticalSentAt(t *testing.T) {
 	require := require.New(t)
 	st := testutil.NewTestStore(t)

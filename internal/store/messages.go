@@ -59,6 +59,12 @@ type Message struct {
 	ArchivedAt      time.Time
 }
 
+// AttachmentFile identifies one content-addressed attachment blob.
+type AttachmentFile struct {
+	ContentHash string
+	Size        int64
+}
+
 // ErrMessagesInsertOnly reports an attempted physical deletion from the archive.
 var ErrMessagesInsertOnly = errors.New("message rows are insert-only")
 
@@ -87,8 +93,9 @@ func (s *Store) MessageExistsBatch(sourceID int64, sourceMessageIDs []string) (m
 	return result, nil
 }
 
-// MessageCompleteBatch returns messages whose raw MIME, materialized
-// attachments, and search row are all present.
+// MessageCompleteBatch returns messages whose raw MIME, attachment metadata,
+// and search row are all present. Callers that depend on materialized blobs
+// must also validate AttachmentFilesForMessage against the content store.
 func (s *Store) MessageCompleteBatch(sourceID int64, sourceMessageIDs []string) (map[string]int64, error) {
 	if len(sourceMessageIDs) == 0 {
 		return make(map[string]int64), nil
@@ -122,6 +129,55 @@ func (s *Store) MessageCompleteBatch(sourceID int64, sourceMessageIDs []string) 
 		return nil, err
 	}
 	return result, nil
+}
+
+// AttachmentFilesForMessage returns the blobs referenced by one message.
+func (s *Store) AttachmentFilesForMessage(messageID int64) ([]AttachmentFile, error) {
+	rows, err := s.db.Query(`
+		SELECT content_hash, size
+		FROM attachments
+		WHERE message_id = ?
+		ORDER BY part_index`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var files []AttachmentFile
+	for rows.Next() {
+		var file AttachmentFile
+		if err := rows.Scan(&file.ContentHash, &file.Size); err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
+}
+
+// AttachmentFilesForSource returns every blob referenced by a source.
+// Duplicate hashes are collapsed because content-addressed storage is shared.
+func (s *Store) AttachmentFilesForSource(sourceID int64) ([]AttachmentFile, error) {
+	rows, err := s.db.Query(`
+		SELECT a.content_hash, MAX(a.size)
+		FROM attachments a
+		JOIN messages m ON m.id = a.message_id
+		WHERE m.source_id = ?
+		GROUP BY a.content_hash
+		ORDER BY a.content_hash`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var files []AttachmentFile
+	for rows.Next() {
+		var file AttachmentFile
+		if err := rows.Scan(&file.ContentHash, &file.Size); err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
 }
 
 // EnsureConversation gets or creates a conversation (thread) for a message.

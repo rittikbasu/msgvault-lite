@@ -112,7 +112,10 @@ func (s *Syncer) initSyncState(sourceID int64) (*syncState, error) {
 		checkpoint: &store.Checkpoint{},
 	}
 
-	if !s.opts.NoResume {
+	// Gmail page tokens are bound to their listing query. Filtered imports are
+	// deliberately fresh each time rather than risking a token from another
+	// filter.
+	if !s.opts.NoResume && s.opts.Query == "" {
 		activeSync, err := s.store.GetActiveSync(sourceID)
 		if err != nil && !errors.Is(err, store.ErrSyncRunNotFound) {
 			return nil, fmt.Errorf("check active sync: %w", err)
@@ -173,6 +176,19 @@ func (s *Syncer) processBatch(ctx context.Context, syncID, sourceID int64, listR
 	existingMap, err := s.store.MessageCompleteBatch(sourceID, messageIDs)
 	if err != nil {
 		return nil, fmt.Errorf("check existing: %w", err)
+	}
+	for sourceMessageID, messageID := range existingMap {
+		files, err := s.store.AttachmentFilesForMessage(messageID)
+		if err != nil {
+			return nil, fmt.Errorf("list attachment files for %s: %w", sourceMessageID, err)
+		}
+		for _, file := range files {
+			if err := export.ValidateAttachmentFile(s.opts.AttachmentsDir, file.ContentHash, file.Size); err != nil {
+				s.logger.Warn("attachment blob incomplete; refetching message", "id", sourceMessageID, "error", err)
+				delete(existingMap, sourceMessageID)
+				break
+			}
+		}
 	}
 
 	// Filter to new messages
@@ -401,6 +417,11 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 		return failWithoutAdvancing(fmt.Errorf(
 			"full sync stopped at --limit %d; cursor not advanced",
 			s.opts.Limit,
+		))
+	}
+	if s.opts.Query != "" {
+		return failWithoutAdvancing(errors.New(
+			"filtered full sync imported matching messages; global cursor not advanced",
 		))
 	}
 

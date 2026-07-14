@@ -16,7 +16,7 @@ import (
 	"go.kenn.io/msgvault/internal/mime"
 )
 
-func TestStoreAttachmentFile_ExistingFileHashMismatch_ReturnsError(t *testing.T) {
+func TestStoreAttachmentFile_ExistingFileHashMismatch_RepairsFile(t *testing.T) {
 	tmp := t.TempDir()
 
 	content := []byte("hello")
@@ -36,8 +36,12 @@ func TestStoreAttachmentFile_ExistingFileHashMismatch_ReturnsError(t *testing.T)
 		ContentHash: hash,
 		Content:     content,
 	}
-	_, err := StoreAttachmentFile(tmp, att)
-	require.ErrorContains(t, err, "hash", "expected hash mismatch error")
+	storagePath, err := StoreAttachmentFile(tmp, att)
+	require.NoError(t, err)
+	assert.Equal(t, path.Join(hash[:2], hash), storagePath)
+	repaired, err := os.ReadFile(fullPath)
+	require.NoError(t, err)
+	assert.Equal(t, content, repaired)
 }
 
 func TestStoreAttachmentFile_ProvidedContentHashMismatch_ReturnsError(t *testing.T) {

@@ -664,6 +664,44 @@ func TestStoreAttachment_ComputesHashWhenMissing(t *testing.T) {
 	require.Equal(string(content), string(b), "attachment file contents")
 }
 
+func TestFullSyncRepairsCorruptAttachmentFile(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	attachmentsDir := filepath.Join(env.TmpDir, "attachments")
+	env.SetOptions(t, func(o *Options) {
+		o.AttachmentsDir = attachmentsDir
+	})
+
+	content := []byte("original attachment bytes")
+	raw := testemail.NewMessage().
+		From("sender@example.com").
+		To(testEmail).
+		Subject("attachment repair").
+		Body("body").
+		WithAttachment("a.txt", "text/plain", content).
+		Bytes()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", raw, []string{"INBOX"})
+
+	runFullSync(t, env)
+	var storagePath string
+	require.NoError(env.Store.DB().QueryRow(
+		`SELECT storage_path FROM attachments LIMIT 1`,
+	).Scan(&storagePath), "select attachment path")
+	fullPath := filepath.Join(attachmentsDir, filepath.FromSlash(storagePath))
+	require.NoError(os.WriteFile(fullPath, []byte("corrupted attachment byte"), 0600), "corrupt attachment")
+	callsBefore := len(env.Mock.GetMessageCalls)
+
+	runFullSync(t, env)
+
+	assert.Len(env.Mock.GetMessageCalls, callsBefore+1, "corrupt message should be fetched again")
+	got, err := os.ReadFile(fullPath)
+	require.NoError(err, "read repaired attachment")
+	assert.Equal(content, got, "attachment content")
+}
+
 func TestStoreAttachment_InvalidContentHash_ReturnsError(t *testing.T) {
 	require := require.New(t)
 	env := newTestEnv(t)
@@ -763,17 +801,27 @@ func TestFullSyncAllErrors(t *testing.T) {
 }
 
 func TestFullSyncWithQuery(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
 	env := newTestEnv(t)
+	env.Mock.Profile.HistoryID = 12345
 	seedMessages(env, 2, 12345, "msg1", "msg2")
 
 	env.SetOptions(t, func(o *Options) {
 		o.Query = "before:2024/06/01"
 	})
 
-	summary := runFullSync(t, env)
+	summary, err := env.Syncer.Full(env.Context, testEmail)
 
-	assert.Equal(t, "before:2024/06/01", env.Mock.LastQuery, "query")
-	assertSummary(t, summary, WantSummary{Added: new(int64(2))})
+	require.Error(err, "filtered full sync must report incomplete status")
+	require.ErrorContains(err, "filtered full sync")
+	require.NotNil(summary, "filtered sync should return its diagnostic summary")
+	assert.Equal("before:2024/06/01", env.Mock.LastQuery, "query")
+	assert.False(summary.WasResumed, "filtered sync must not resume an unbound page token")
+
+	source, err := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(err, "GetSourceByIdentifier")
+	assert.False(source.SyncCursor.Valid, "filtered full sync must not establish a global cursor")
 }
 
 func TestFullSyncPagination(t *testing.T) {

@@ -160,7 +160,15 @@ func StoreAttachmentFile(attachmentsDir string, att *mime.Attachment) (string, e
 	expectedSize := int64(len(att.Content))
 
 	if _, err := os.Lstat(fullPath); err == nil {
-		if err := validateExistingAttachmentFile(fullPath, expectedSize, contentHash); err != nil {
+		if err := validateExistingAttachmentFile(fullPath, expectedSize, contentHash); err == nil {
+			return storagePath, nil
+		}
+		// The source bytes are authoritative. Remove a corrupt canonical blob
+		// and replace it atomically so a full sync can repair local damage.
+		if err := os.Remove(fullPath); err != nil {
+			return "", fmt.Errorf("remove corrupt attachment file: %w", err)
+		}
+		if err := writeAtomicFile(fullPath, att.Content, expectedSize, contentHash); err != nil {
 			return "", err
 		}
 		return storagePath, nil
@@ -172,6 +180,20 @@ func StoreAttachmentFile(attachmentsDir string, att *mime.Attachment) (string, e
 		return "", err
 	}
 	return storagePath, nil
+}
+
+// ValidateAttachmentFile verifies the canonical content-addressed blob for a
+// database attachment row.
+func ValidateAttachmentFile(attachmentsDir, contentHash string, expectedSize int64) error {
+	storagePath, err := StoragePath(attachmentsDir, contentHash)
+	if err != nil {
+		return err
+	}
+	fullPath, err := filepath.Abs(storagePath)
+	if err != nil {
+		return fmt.Errorf("abs attachment path %q: %w", storagePath, err)
+	}
+	return validateExistingAttachmentFile(fullPath, expectedSize, contentHash)
 }
 
 func validateExistingAttachmentFile(fullPath string, expectedSize int64, expectedHash string) error {

@@ -184,10 +184,10 @@ func TestNewRateLimiterWithCapacity_BurstCapped(t *testing.T) {
 
 	// Exactly 10 cost-1 ops drain the bucket without blocking.
 	for i := range 10 {
-		assert.True(rl.TryAcquire(OpEventsList), "op %d should acquire", i)
+		assert.True(rl.TryAcquire(OpProfile), "op %d should acquire", i)
 	}
 	// The 11th must fail — proving the burst is capped at 10, not 250.
-	assert.False(rl.TryAcquire(OpEventsList), "11th op must be throttled (no 250-burst)")
+	assert.False(rl.TryAcquire(OpProfile), "11th op must be throttled (no 250-burst)")
 
 	// Refill is 8 tok/s: after 1s, ~8 tokens return.
 	clk.Advance(1 * time.Second)
@@ -213,12 +213,6 @@ func TestNewRateLimiterWithCapacity_NilClockPanics(t *testing.T) {
 	assert.Panics(t, func() {
 		newRateLimiterWithCapacity(nil, 10, 8)
 	}, "newRateLimiterWithCapacity(nil, ...) should panic")
-}
-
-func TestCalendarOperationCost(t *testing.T) {
-	for _, op := range []Operation{OpCalendarListList, OpEventsList, OpEventsGet} {
-		assert.Equal(t, 1, op.Cost(), "calendar op %d cost", op)
-	}
 }
 
 func TestOperationCost(t *testing.T) {

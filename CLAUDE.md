@@ -63,7 +63,7 @@ The database is the durable system of record. Gmail deletions become local tombs
 
 A benchmark on a copied 34,176-message archive found SQLite warm latency of 34 ms for total stats and 80-174 ms for unused aggregate views. DuckDB improved those unused aggregates to 22-38 ms, but added cache freshness semantics, runtime extension logic, a roughly 40x engine startup cost, and 68 MB to the binary. No retained command exposes those aggregate views, so DuckDB and Parquet analytics were removed.
 
-Retired schema fields such as `messages.embed_gen` remain physically present for archive compatibility but have no application behavior. Do not reintroduce vector search around them.
+Retired schema fields such as `messages.embed_gen` are absent from the fresh v0 schema. Do not reintroduce vector search around them.
 
 ## common commands
 

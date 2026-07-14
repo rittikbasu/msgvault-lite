@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/config"
+	"go.kenn.io/msgvault/internal/export"
 	"go.kenn.io/msgvault/internal/store"
 )
 
@@ -71,6 +74,45 @@ func TestRunIntegrityCheckDetectsForeignKeyViolations(t *testing.T) {
 	require.NoError(err)
 	require.Len(errs, 1)
 	assert.Contains(t, errs[0], "foreign key violation")
+}
+
+func TestVerifyAttachmentFilesDetectsCorruptBlob(t *testing.T) {
+	require := require.New(t)
+	st, err := store.OpenForTest(filepath.Join(t.TempDir(), "msgvault.db"))
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(st.Close()) })
+	require.NoError(st.InitSchema())
+	source, err := st.GetOrCreateSource("gmail", "test@example.com")
+	require.NoError(err)
+	conversationID, err := st.EnsureConversation(source.ID, "thread", "subject")
+	require.NoError(err)
+	messageID, err := st.UpsertMessage(&store.Message{
+		ConversationID:  conversationID,
+		SourceID:        source.ID,
+		SourceMessageID: "message",
+	})
+	require.NoError(err)
+
+	content := []byte("attachment")
+	sum := sha256.Sum256(content)
+	contentHash := hex.EncodeToString(sum[:])
+	attachmentsDir := filepath.Join(t.TempDir(), "attachments")
+	fullPath, err := export.StoragePath(attachmentsDir, contentHash)
+	require.NoError(err)
+	storagePath := filepath.Join(contentHash[:2], contentHash)
+	require.NoError(os.MkdirAll(filepath.Dir(fullPath), 0700))
+	require.NoError(os.WriteFile(fullPath, content, 0600))
+	require.NoError(st.UpsertAttachment(messageID, 0, "a.txt", "text/plain", storagePath, contentHash, len(content)))
+
+	integrityErrors, err := verifyAttachmentFiles(st, source.ID, attachmentsDir)
+	require.NoError(err)
+	require.Empty(integrityErrors)
+	require.NoError(os.WriteFile(fullPath, []byte("corruptment"), 0600))
+
+	integrityErrors, err = verifyAttachmentFiles(st, source.ID, attachmentsDir)
+	require.NoError(err)
+	require.Len(integrityErrors, 1)
+	assert.Contains(t, integrityErrors[0], "attachment "+contentHash)
 }
 
 // TestNewVerifyResult checks the machine-readable summary math behind

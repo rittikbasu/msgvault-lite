@@ -12,6 +12,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
+	"go.kenn.io/msgvault/internal/export"
 	"go.kenn.io/msgvault/internal/gmail"
 	"go.kenn.io/msgvault/internal/mime"
 	"go.kenn.io/msgvault/internal/oauth"
@@ -104,7 +105,7 @@ var verifyCmd = &cobra.Command{
 and sampling messages to ensure raw MIME data is intact.
 
 This command:
-1. Runs SQLite PRAGMA integrity_check (unless --skip-db-check)
+1. Runs SQLite and attachment-blob integrity checks (unless --skip-db-check)
 2. Compares local message count with Gmail's reported total
 3. Checks how many messages have raw MIME data stored
 4. Samples random messages and verifies their MIME can be decompressed
@@ -182,6 +183,27 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	}
 	if src != nil {
 		appName = sourceOAuthApp(src)
+	}
+	if !verifySkipDBCheck && src != nil {
+		attachmentErrors, err := verifyAttachmentFiles(s, src.ID, cfg.AttachmentsDir())
+		if err != nil {
+			return err
+		}
+		if len(attachmentErrors) > 0 {
+			ok := false
+			dbIntegrityOK = &ok
+			emitf("  Attachment integrity: FAILED (%d errors)\n", len(attachmentErrors))
+			for i, attachmentErr := range attachmentErrors {
+				if i >= 10 {
+					emitf("  ... and %d more errors\n", len(attachmentErrors)-10)
+					break
+				}
+				emitf("  - %s\n", attachmentErr)
+			}
+		} else {
+			emitln("  Attachment integrity: OK")
+		}
+		emitln()
 	}
 
 	if !cfg.OAuth.HasAnyConfig() {
@@ -386,6 +408,20 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return verifyAcceptanceError(result)
+}
+
+func verifyAttachmentFiles(s *store.Store, sourceID int64, attachmentsDir string) ([]string, error) {
+	files, err := s.AttachmentFilesForSource(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("list attachment files: %w", err)
+	}
+	var integrityErrors []string
+	for _, file := range files {
+		if err := export.ValidateAttachmentFile(attachmentsDir, file.ContentHash, file.Size); err != nil {
+			integrityErrors = append(integrityErrors, fmt.Sprintf("attachment %s: %v", file.ContentHash, err))
+		}
+	}
+	return integrityErrors, nil
 }
 
 // runIntegrityCheck checks SQLite structure and foreign-key relationships.

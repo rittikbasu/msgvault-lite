@@ -515,8 +515,9 @@ func TestGetTokenSourceWithReauth(t *testing.T) {
 			if tt.wantErr {
 				require.Error(err)
 				if tt.errContains != "" {
-					require.ErrorContains(err, tt.errContains)
+					assert.Contains(err.Error(), tt.errContains)
 				}
+				assert.NotContains(err.Error(), "%!(EXTRA", "error formatting")
 				assert.Nil(ts, "expected nil token source on error")
 			} else {
 				require.NoError(err)

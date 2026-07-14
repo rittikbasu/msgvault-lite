@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"math/rand"
 	"regexp"
 	"strings"
@@ -290,10 +289,6 @@ func upsertMessageSQL(id, now string) string {
 		has_attachments, attachment_count, archived_at
 	) VALUES (%s, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
 	ON CONFLICT(source_id, source_message_id) DO UPDATE SET
-		embed_gen = CASE
-			WHEN COALESCE(messages.subject, '') <> COALESCE(excluded.subject, '') THEN NULL
-			ELSE messages.embed_gen
-		END,
 		conversation_id = excluded.conversation_id,
 		rfc822_message_id = excluded.rfc822_message_id,
 		sent_at = excluded.sent_at,
@@ -364,53 +359,14 @@ func (s *Store) UpsertMessageBody(messageID int64, bodyText, bodyHTML sql.NullSt
 }
 
 func upsertMessageBody(q querier, messageID int64, bodyText, bodyHTML sql.NullString) error {
-	bodyChanged, err := messageBodyChanged(q, messageID, bodyText, bodyHTML)
-	if err != nil {
-		return err
-	}
-	_, err = q.Exec(`
+	_, err := q.Exec(`
 		INSERT INTO message_bodies (message_id, body_text, body_html)
 		VALUES (?, ?, ?)
 		ON CONFLICT(message_id) DO UPDATE SET
 			body_text = excluded.body_text,
 			body_html = excluded.body_html
 	`, messageID, bodyText, bodyHTML)
-	if err != nil {
-		return err
-	}
-	if !bodyChanged {
-		return nil
-	}
-	_, err = q.Exec(`UPDATE messages SET embed_gen = NULL WHERE id = ? AND embed_gen IS NOT NULL`, messageID)
 	return err
-}
-
-func messageBodyChanged(q querier, messageID int64, bodyText, bodyHTML sql.NullString) (bool, error) {
-	var oldText, oldHTML sql.NullString
-	err := q.QueryRow(`
-		SELECT body_text, body_html FROM message_bodies WHERE message_id = ?
-	`, messageID).Scan(&oldText, &oldHTML)
-	if errors.Is(err, sql.ErrNoRows) {
-		return embeddingBodyValue(bodyText, bodyHTML) != "", nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return embeddingBodyValue(oldText, oldHTML) != embeddingBodyValue(bodyText, bodyHTML), nil
-}
-
-func embeddingBodyValue(bodyText, bodyHTML sql.NullString) string {
-	if v := nullStringValue(bodyText); v != "" {
-		return v
-	}
-	return mime.StripHTML(nullStringValue(bodyHTML))
-}
-
-func nullStringValue(ns sql.NullString) string {
-	if !ns.Valid {
-		return ""
-	}
-	return ns.String
 }
 
 // UpsertMessageRaw stores the compressed raw MIME data for a message.
@@ -1270,20 +1226,7 @@ func (s *Store) backfillFTSRange(minID, maxID int64, progress func(done, total i
 		batchEnd := cursor + batchSize
 		n, err := s.backfillFTSBatch(cursor, batchEnd)
 		if err != nil {
-			// Only the specific PG tsvector-overflow error (a single
-			// pathological row whose body exceeds PostgreSQL's tsvector
-			// limit) is recoverable by retrying the batch row by row and
-			// skipping the offending row(s). EVERY OTHER error (dead
-			// connection, a non-size SQLSTATE, etc.) is systemic — it would
-			// hit every row and silently clear-then-skip the whole archive —
-			// so it must ABORT and propagate, not be masked as success.
-			if !s.dialect.IsFTSValueTooLargeError(err) {
-				return indexed, err
-			}
-			n, err = s.backfillFTSRowByRow(cursor, batchEnd)
-			if err != nil {
-				return indexed, err
-			}
+			return indexed, err
 		}
 		indexed += n
 		cursor = batchEnd
@@ -1296,69 +1239,10 @@ func (s *Store) backfillFTSRange(minID, maxID int64, progress func(done, total i
 	return indexed, nil
 }
 
-// backfillFTSRowByRow re-runs the batch backfill one message id at a time over
-// [fromID, toID), called only after a whole-batch failure that was classified
-// as the recoverable PG tsvector-overflow error. A row is skipped (with a
-// logged warning naming the id) ONLY when its per-row failure is itself the
-// tsvector-overflow error; any OTHER per-row error aborts and is returned so a
-// systemic failure cannot be swallowed. Returns the number of rows indexed.
-//
-// A skipped row is NOT left with search_fts NULL: the codebase treats
-// search_fts IS NULL as the sole "needs backfill" signal (FTSNeedsBackfill /
-// idx_messages_search_fts_null), so leaving a permanently-unindexable row NULL
-// would make backfill re-run forever, re-hitting the same overflow each time.
-// Instead the row is marked with a non-NULL empty tsvector: it drops out of the
-// needs-backfill probe and the partial NULL index, and the row is correctly
-// unsearchable (an empty vector matches nothing). This skip write is PG-only —
-// the overflow error is PG-specific (IsFTSValueTooLargeError is always false on
-// SQLite), so the PG-syntax empty-tsvector literal is safe.
-func (s *Store) backfillFTSRowByRow(fromID, toID int64) (int64, error) {
-	var indexed int64
-	for id := fromID; id < toID; id++ {
-		n, err := s.backfillFTSBatch(id, id+1)
-		if err != nil {
-			if !s.dialect.IsFTSValueTooLargeError(err) {
-				return indexed, err
-			}
-			// Mark the overflow row terminal with a non-NULL empty tsvector so
-			// FTSNeedsBackfill stops flagging it and backfill cannot loop on it
-			// forever. Keep the warning so the skipped id is still logged.
-			slog.Warn("skipping message in FTS backfill",
-				slog.Int64("message_id", id),
-				slog.Any("error", err))
-			if _, uerr := s.db.Exec(
-				`UPDATE messages SET search_fts = ''::tsvector WHERE id = ?`, id,
-			); uerr != nil {
-				return indexed, fmt.Errorf("mark FTS-overflow row %d terminal: %w", id, uerr)
-			}
-			continue
-		}
-		indexed += n
-	}
-	return indexed, nil
-}
-
-// backfillFTSBatchErrHook is a test-only seam: when non-nil it is consulted
-// before each batch's UPDATE, and a non-nil return forces backfillFTSBatch to
-// fail for the given id range. It lets tests exercise backfillFTSRowByRow's
-// skip-and-continue fallback deterministically without depending on a body that
-// happens to overflow PostgreSQL's tsvector limit after the LEFT cap. Nil (and
-// thus a no-op) in production; only export_test.go ever sets it.
-var backfillFTSBatchErrHook func(fromID, toID int64) error
-
 // backfillFTSBatch inserts FTS rows for messages with id in [fromID, toID).
-//
-// Each batch runs under runMaintenance so the pool-wide 30s statement_timeout
-// is disabled for the batch: a 5000-row tsvector rewrite can exceed 30s on a
-// large archive (finding S1). Each batch remains its own committed transaction,
-// preserving the existing "partial progress is preserved if interrupted"
-// semantics. No-op timeout reset on SQLite.
+// Each batch is its own committed transaction, preserving partial progress if
+// the operation is interrupted.
 func (s *Store) backfillFTSBatch(fromID, toID int64) (int64, error) {
-	if backfillFTSBatchErrHook != nil {
-		if err := backfillFTSBatchErrHook(fromID, toID); err != nil {
-			return 0, err
-		}
-	}
 	var affected int64
 	err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
 		result, err := tx.ExecContext(ctx, s.dialect.FTSBackfillBatchSQL(), fromID, toID)

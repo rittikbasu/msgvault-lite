@@ -39,17 +39,24 @@ func TestAccountScheduleEmpty(t *testing.T) {
 	assert.Empty(t, scheduled)
 }
 
-func TestLoadIgnoresRetiredAnalyticsConfig(t *testing.T) {
+func TestLoadIgnoresRetiredConfigSections(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(`
 [analytics]
 engine = "duckdb"
 auto_build_cache = true
+
+[vector]
+enabled = true
+db_path = "vectors.db"
+
+[vector.embeddings]
+model = "retired-model"
 `), 0o644), "WriteFile()")
 
 	_, err := Load(configPath, "")
-	require.NoError(t, err, "retired analytics keys should remain compatible")
+	require.NoError(t, err, "retired config keys should remain compatible")
 }
 
 func TestLoadWithServerConfig(t *testing.T) {
@@ -1204,97 +1211,6 @@ client_secrets = "/absolute/personal.json"
 
 	// HasAnyConfig should be true
 	assert.True(cfg.OAuth.HasAnyConfig())
-}
-
-func TestLoadExpandsVectorDBPath(t *testing.T) {
-	require := require.New(t)
-	home, err := os.UserHomeDir()
-	require.NoError(err, "UserHomeDir")
-
-	tmpDir := t.TempDir()
-	t.Setenv("MSGVAULT_HOME", tmpDir)
-
-	configContent := `
-[vector]
-enabled = true
-db_path = "~/custom/vectors.db"
-
-[vector.embeddings]
-endpoint = "http://localhost:8080/v1"
-model = "nomic-embed-text-v1.5"
-dimension = 768
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile")
-
-	cfg, err := Load("", "")
-	require.NoError(err, "Load")
-
-	expected := filepath.Join(home, "custom/vectors.db")
-	assert.Equal(t, expected, cfg.Vector.DBPath)
-}
-
-func TestLoadResolvesRelativeVectorDBPath(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	configContent := `
-[vector]
-enabled = true
-db_path = "sub/vectors.db"
-
-[vector.embeddings]
-endpoint = "http://localhost:8080/v1"
-model = "nomic-embed-text-v1.5"
-dimension = 768
-`
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile")
-
-	cfg, err := Load(configPath, "")
-	require.NoError(t, err, "Load")
-
-	expected := filepath.Join(tmpDir, "sub/vectors.db")
-	assert.Equal(t, expected, cfg.Vector.DBPath)
-}
-
-// TestLoadReappliesVectorDefaults verifies that a zero-valued numeric
-// field in the TOML file (e.g. max_retries = 0) gets normalized back to
-// the documented default so users cannot accidentally disable retries or
-// timeouts. Preprocess booleans use pointer semantics and are exempt
-// from this re-defaulting.
-func TestLoadReappliesVectorDefaults(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.toml")
-
-	configContent := `
-[vector]
-enabled = true
-
-[vector.embeddings]
-endpoint = "http://localhost:8080/v1"
-model = "nomic-embed-text"
-dimension = 768
-max_retries = 0
-timeout = "0s"
-
-[vector.preprocess]
-strip_signatures = false
-`
-	require.NoError(os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile")
-
-	cfg, err := Load(configPath, "")
-	require.NoError(err, "Load")
-
-	assert.Equal(3, cfg.Vector.Embeddings.MaxRetries, "MaxRetries should re-default from explicit 0")
-	// NOTE: TOML "0s" currently decodes to time.Duration(0); post-decode
-	// ApplyDefaults lifts it back to 30s to avoid a hang.
-	assert.Positive(cfg.Vector.Embeddings.Timeout, "Timeout should re-default from explicit 0s")
-	// Explicit false in the TOML file must survive.
-	assert.False(cfg.Vector.Preprocess.StripSignaturesEnabled(), "StripSignaturesEnabled() should be false (user explicitly set)")
-	// Omitted sibling stays at default true.
-	assert.True(cfg.Vector.Preprocess.StripQuotesEnabled(), "StripQuotesEnabled() should be true (unset → default)")
 }
 
 func TestLoadWithNamedOAuthApps_RelativePaths(t *testing.T) {

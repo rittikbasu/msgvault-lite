@@ -22,7 +22,7 @@ Gmail is convenient, but it should not be the only copy of years of email. msgva
 
 ## build
 
-msgvault currently builds from source and requires Go 1.26.5 plus a working C/C++ toolchain.
+msgvault currently builds from source and requires Go 1.26.5 plus a working C toolchain.
 
 from a repository clone:
 

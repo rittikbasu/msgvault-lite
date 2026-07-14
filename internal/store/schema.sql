@@ -155,24 +155,14 @@ CREATE TABLE IF NOT EXISTS messages (
     archived_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     indexing_version INTEGER DEFAULT 1,
 
-    -- Row-level last-modified watermark, maintained ENTIRELY by the
-    -- database (triggers below), never by application write paths. Used by
-    -- the embed worker as an optimistic-CAS token: it captures this value
-    -- when it reads a message's content and stamps embed_gen only if the
-    -- value is unchanged at stamp time, so a concurrent content edit
-    -- (e.g. repair-encoding) that lands between read and stamp leaves the
-    -- row unstamped and it is re-embedded with the corrected content.
+    -- Row-level last-modified watermark maintained by database triggers.
     last_modified DATETIME DEFAULT CURRENT_TIMESTAMP,
 
     -- Platform-specific metadata
     metadata JSON,
 
-    -- Vector-embedding watermark: the index generation this message's
-    -- embeddings were last written for. NULL means "needs embedding"
-    -- (new rows default to NULL); a value equal to the active/building
-    -- generation id means "covered". The scan-and-fill embed worker
-    -- finds work via (embed_gen IS NULL OR embed_gen <> <target>) and
-    -- stamps this column after a successful upsert (or skip).
+    -- Retained for compatibility with archives created before vector search
+    -- was removed. Application write paths do not use this column.
     embed_gen INTEGER,
 
     UNIQUE(source_id, source_message_id)

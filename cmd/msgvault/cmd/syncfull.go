@@ -101,11 +101,6 @@ func runSyncFullLocal(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	// Embedding is no longer driven by sync: newly-ingested messages
-	// get embed_gen = NULL by column default and the scan-and-fill
-	// embed worker (msgvault embeddings build / the serve daemon)
-	// picks them up.
-
 	for _, src := range sources {
 		if ctx.Err() != nil {
 			break

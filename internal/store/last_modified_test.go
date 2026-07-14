@@ -49,10 +49,8 @@ func baselineLM(t *testing.T, st *store.Store, id int64) string {
 	return readLM(t, st, id)
 }
 
-// readLM reads last_modified as a comparable string on both backends. On
-// SQLite it CASTs to TEXT to defeat go-sqlite3's DATETIME→time.Time coercion
-// (the same trick the embed worker uses); on PostgreSQL it casts to text in
-// SQL so the comparison is a plain string on either backend.
+// readLM reads last_modified as text to defeat go-sqlite3's
+// DATETIME-to-time.Time coercion.
 func readLM(t *testing.T, st *store.Store, id int64) string {
 	t.Helper()
 	expr := "CAST(last_modified AS TEXT)"
@@ -77,23 +75,6 @@ func TestLastModified_MessageUpdateBumps(t *testing.T) {
 
 	got := readLM(t, st, id)
 	assert.NotEqual(t, base, got, "message UPDATE must bump last_modified")
-}
-
-// TestLastModified_EmbedGenUpdateBumps verifies even an embed_gen-only UPDATE
-// bumps last_modified — expected/harmless (the worker's CAS WHERE matches the
-// PRE-trigger value, so its own stamp still succeeds; see
-// SetEmbedGenIfUnchanged).
-func TestLastModified_EmbedGenUpdateBumps(t *testing.T) {
-	st := testutil.NewTestStore(t)
-	id := seedMessageForLM(t, st)
-	base := baselineLM(t, st, id)
-
-	_, err := st.DB().Exec(
-		st.Rebind(`UPDATE messages SET embed_gen = ? WHERE id = ?`), int64(7), id)
-	require.NoError(t, err, "update embed_gen")
-
-	got := readLM(t, st, id)
-	assert.NotEqual(t, base, got, "embed_gen-only UPDATE bumps last_modified (expected)")
 }
 
 // TestLastModified_BodyUpdateBumpsParent verifies an UPDATE to message_bodies
@@ -215,8 +196,7 @@ INSERT INTO message_bodies (message_id, body_text) VALUES (1, 'body one'), (2, '
 	require.NoError(st.InitSchema(),
 		"InitSchema must succeed on a messages table lacking last_modified")
 
-	// (b) The column now exists and the pre-existing rows were backfilled to a
-	//     non-NULL value (a NULL CAS token would loop "needs embedding" forever).
+	// (b) The column now exists and pre-existing rows have non-NULL values.
 	var postCols int
 	require.NoError(st.DB().QueryRow(
 		`SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'last_modified'`).Scan(&postCols),

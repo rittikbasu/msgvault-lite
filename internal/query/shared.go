@@ -68,18 +68,16 @@ const sqliteSenderJoin = `LEFT JOIN message_recipients mr_from ON mr_from.id = (
 		)
 		LEFT JOIN participants p_sender ON p_sender.id = COALESCE(mr_from.participant_id, m.sender_id)`
 
-// rebindFunc converts a query written with ? placeholders into the
-// driver-native form. Helpers in this file accept it explicitly so PostgreSQL
-// ($1, $2, …) and SQLite (?) can share one implementation. Pass
-// noopRebind when the underlying driver accepts ? natively.
+// rebindFunc lets callers transform a query written with ? placeholders.
+// SQLite callers use noopRebind.
 type rebindFunc func(string) string
 
 // noopRebind passes the query through unchanged.
 func noopRebind(q string) string { return q }
 
 // fetchLabelsForMessageList adds labels to message summaries using a batch query.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use.
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed.
 func fetchLabelsForMessageList(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, messages []MessageSummary) error {
 	if len(messages) == 0 {
 		return nil
@@ -122,8 +120,8 @@ func fetchLabelsForMessageList(ctx context.Context, db *sql.DB, rebind rebindFun
 }
 
 // fetchParticipantsForMessageList adds recipients to message summaries using a batch query.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use.
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed.
 func fetchParticipantsForMessageList(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, messages []MessageSummary) error {
 	if len(messages) == 0 {
 		return nil
@@ -182,8 +180,8 @@ func appendSummaryRecipient(msg *MessageSummary, recipType string, addr Address)
 }
 
 // fetchMessageLabelsDetail fetches labels for a single message detail.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use.
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed.
 func fetchMessageLabelsDetail(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, msg *MessageDetail) error {
 	rows, err := db.QueryContext(ctx, rebind(fmt.Sprintf(`
 		SELECT l.name
@@ -208,8 +206,8 @@ func fetchMessageLabelsDetail(ctx context.Context, db *sql.DB, rebind rebindFunc
 }
 
 // fetchParticipantsShared fetches participants for a single message detail.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use.
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed.
 func fetchParticipantsShared(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, msg *MessageDetail) error {
 	rows, err := db.QueryContext(ctx, rebind(fmt.Sprintf(`
 		SELECT mr.recipient_type, COALESCE(NULLIF(p.email_address, ''), NULLIF(p.phone_number, ''), ''), %s
@@ -244,8 +242,8 @@ func fetchParticipantsShared(ctx context.Context, db *sql.DB, rebind rebindFunc,
 }
 
 // fetchAttachmentsShared fetches attachments for a single message detail.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use.
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed.
 func fetchAttachmentsShared(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, msg *MessageDetail) error {
 	rows, err := db.QueryContext(ctx, rebind(fmt.Sprintf(`
 		SELECT id, COALESCE(filename, ''), COALESCE(mime_type, ''), COALESCE(size, 0), COALESCE(content_hash, ''), COALESCE(storage_path, '')
@@ -278,8 +276,8 @@ func isURLStoragePath(path string) bool {
 }
 
 // extractBodyFromRawShared extracts text body from compressed MIME data.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use.
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed.
 func extractBodyFromRawShared(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, messageID int64) (string, error) {
 	var compressed []byte
 	var compression sql.NullString
@@ -353,8 +351,8 @@ func getMessageRawShared(ctx context.Context, db *sql.DB, rebind rebindFunc, tab
 }
 
 // getMessageByQueryShared retrieves a full message detail by an arbitrary WHERE clause.
-// tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
-// rebind rewrites the ? placeholders for the driver in use; it is applied
+// tablePrefix optionally qualifies table names; SQLite callers pass "".
+// rebind rewrites ? placeholders when needed; it is applied
 // to every sub-query this function dispatches.
 func getMessageByQueryShared(ctx context.Context, db *sql.DB, rebind rebindFunc, tablePrefix string, whereClause string, args ...any) (*MessageDetail, error) {
 	query := fmt.Sprintf(`

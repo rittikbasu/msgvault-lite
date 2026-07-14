@@ -63,7 +63,7 @@ The database is the durable system of record. Gmail deletions become local tombs
 
 A benchmark on a copied 34,176-message archive found SQLite warm latency of 34 ms for total stats and 80-174 ms for unused aggregate views. DuckDB improved those unused aggregates to 22-38 ms, but added cache freshness semantics, runtime extension logic, a roughly 40x engine startup cost, and 68 MB to the binary. No retained command exposes those aggregate views, so DuckDB and Parquet analytics were removed.
 
-The remaining PostgreSQL, vector, daemon, and provider fields in shared config/store packages are inherited carve residue. Do not expand them; remove them while preserving SQLite schema compatibility for existing archives.
+Retired schema fields such as `messages.embed_gen` remain physically present for archive compatibility but have no application behavior. Do not reintroduce vector search around them.
 
 ## common commands
 
@@ -78,7 +78,7 @@ make lint-ci
 make clean
 ```
 
-All Go test invocations currently require `-tags "fts5 sqlite_vec"`; prefer `make test` so the project supplies the tags. After the remaining vector residue is removed, update this rule and the Makefile together.
+All Go test invocations require `-tags "fts5"`; prefer `make test` so the project supplies the tag.
 
 ## testing
 
@@ -98,7 +98,7 @@ All Go changes must pass:
 ```bash
 make fmt
 make test
-go vet -tags "fts5 sqlite_vec" ./...
+go vet -tags "fts5" ./...
 make build
 ```
 

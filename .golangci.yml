@@ -2,10 +2,9 @@ version: "2"
 
 run:
   # Lint the build-tagged code, not just the untagged subset. The primary
-  # build uses `fts5 sqlite_vec` (Makefile BUILD_TAGS).
+  # build uses `fts5` (Makefile BUILD_TAGS).
   build-tags:
     - fts5
-    - sqlite_vec
 
 linters:
   # Opt-in linter set: only the linters listed under `enable` run. Using

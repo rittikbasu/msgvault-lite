@@ -614,19 +614,9 @@ func (s *Store) InitSchema() error {
 	}
 
 	// Backfill last_modified for rows that predate the column. SQLite cannot
-	// ADD COLUMN with a non-constant default, so the legacy ADD COLUMN above
-	// leaves existing rows NULL; this one-shot UPDATE sets them to
-	// CURRENT_TIMESTAMP so the embed worker's CAS token is a comparable value
-	// (a NULL token would never satisfy `last_modified = ?` and the row would
-	// loop "needs embedding" forever). Idempotent and portable: on a fresh
-	// DB (or PostgreSQL, whose ADD COLUMN ... DEFAULT CURRENT_TIMESTAMP
-	// backfills automatically) no rows are NULL, so this is a no-op. Gated
-	// on the applied_migrations ledger: last_modified has no index, so the
-	// UPDATE's WHERE clause is a full scan of the messages table — the
-	// dominant cost of daemon startup on a large archive — and it never
-	// finds work after the first run. Run under runMaintenance so the
-	// full-table UPDATE on a large archive is not cut off by the pool-wide
-	// statement_timeout (no-op reset on SQLite).
+	// ADD COLUMN with a non-constant default, so the legacy migration leaves
+	// existing rows NULL. The migration ledger avoids repeating this full-table
+	// scan after the first successful run.
 	lastModifiedMigrated, err := s.IsMigrationApplied(migrationMessagesLastModifiedBackfill)
 	if err != nil {
 		return err
@@ -645,15 +635,8 @@ func (s *Store) InitSchema() error {
 		}
 	}
 
-	// Drop the obsolete partial index over messages needing embedding. It was
-	// redundant with the per-generation embed watermark (the work-finder scan
-	// rides the messages PRIMARY KEY B-tree via `id > :watermark ORDER BY id`)
-	// and useless during a rebuild (old-gen leftovers carry a non-NULL embed_gen
-	// that an `embed_gen IS NULL` index never covers), while costing index
-	// maintenance on the two hottest write paths (message insert + embed_gen
-	// stamp). DROP IF EXISTS is idempotent and portable across SQLite/PG; it
-	// cleans up any dev DB that already created the index. Run under
-	// runMaintenance to match the original CREATE's transaction context.
+	// Remove an obsolete embedding index from archives that previously created
+	// it. The compatibility column itself remains untouched.
 	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
 		_, err := tx.ExecContext(ctx,
 			`DROP INDEX IF EXISTS idx_messages_embed_gen`)
@@ -662,8 +645,7 @@ func (s *Store) InitSchema() error {
 		return fmt.Errorf("drop idx_messages_embed_gen: %w", err)
 	}
 
-	// Load the optional FTS schema, if the dialect keeps one separate.
-	// PostgreSQL returns "" here because its tsvector lives in the main schema.
+	// Load the optional FTS schema.
 	if ftsFile := s.dialect.SchemaFTS(); ftsFile != "" {
 		ftsSchema, err := schemaFS.ReadFile(ftsFile)
 		if err != nil {

@@ -29,15 +29,6 @@ type Engine interface {
 	// Returns nil, nil if no raw data is stored for the given ID.
 	GetMessageRaw(ctx context.Context, id int64) ([]byte, error)
 
-	// GetMessageSummariesByIDs returns summary-level rows (no body, no
-	// raw MIME) for the supplied IDs in the same order as ids. Missing
-	// IDs are silently dropped — callers loop over IDs from a search
-	// hit list and treat absent rows as "deleted/retired, skip". This
-	// is the bulk hydration path search handlers should use to avoid
-	// the per-hit GetMessage N+1 (body + recipients + labels +
-	// attachments per message).
-	GetMessageSummariesByIDs(ctx context.Context, ids []int64) ([]MessageSummary, error)
-
 	// Search - full-text search using FTS5 (includes message body)
 	Search(ctx context.Context, query *search.Query, limit, offset int) ([]MessageSummary, error)
 

@@ -12,10 +12,9 @@ LDFLAGS := -X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=$(VERSION) \
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 
-# Default build tags applied to every go build/test/bench invocation.
+# Build tags:
 # - fts5: enable the SQLite FTS5 full-text search extension
-# - sqlite_vec: enable the sqlite-vec extension for vector search
-BUILD_TAGS := fts5 sqlite_vec
+BUILD_TAGS := fts5
 
 
 # Keep golangci-lint results scoped to this git worktree. Its cache can contain
@@ -25,7 +24,7 @@ DEFAULT_GOLANGCI_LINT_CACHE := $(shell git rev-parse --path-format=absolute --gi
 GOLANGCI_LINT_CACHE ?= $(DEFAULT_GOLANGCI_LINT_CACHE)
 export GOLANGCI_LINT_CACHE
 
-.PHONY: build build-release install clean test test-v fmt lint lint-ci tidy install-hooks bench help
+.PHONY: build build-release install clean test test-v fmt lint lint-ci tidy install-hooks help
 
 # Build the binary (debug)
 build:
@@ -107,12 +106,6 @@ install-hooks:
 tidy:
 	go mod tidy
 
-# Run benchmarks (query engine smoke test)
-bench:
-	go test -tags "$(BUILD_TAGS)" -run=^$$ -bench=. -benchtime=1s -count=1 ./internal/query/
-
-
-
 # Show help
 help:
 	@echo "msgvault build targets:"
@@ -129,5 +122,3 @@ help:
 	@echo "  tidy           - Tidy go.mod"
 	@echo "  install-hooks  - Install pre-commit hook via prek"
 	@echo "  clean          - Remove build artifacts"
-	@echo ""
-	@echo "  bench          - Run query engine benchmarks"

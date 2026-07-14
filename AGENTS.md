@@ -34,7 +34,7 @@ check.
 
 ## Build Tags
 
-All `go test` invocations need `-tags "fts5 sqlite_vec"`. Prefer `make test` to get the tags automatically.
+All `go test` invocations need `-tags "fts5"`. Prefer `make test` to get the tag automatically.
 
 ## Commits
 

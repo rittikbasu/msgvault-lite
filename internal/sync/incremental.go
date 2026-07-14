@@ -192,10 +192,6 @@ func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary
 					checkpoint.MessagesAdded++
 					summary.BytesDownloaded += int64(len(raw.Raw))
 				}
-
-				// Newly-persisted messages get embed_gen = NULL by column
-				// default, so the scan-and-fill embed worker picks them up
-				// automatically — no sync-time enqueue step is needed.
 			}
 		}
 
@@ -326,9 +322,6 @@ func (s *Syncer) handleLabelChange(ctx context.Context, syncID, sourceID int64, 
 				checkpoint.ErrorsCount++
 				return false, err
 			}
-			// The new message gets embed_gen = NULL by column default, so
-			// the scan-and-fill embed worker picks it up automatically — no
-			// sync-time enqueue step is needed.
 			checkpoint.MessagesAdded++
 			if raw != nil {
 				summary.BytesDownloaded += int64(len(raw.Raw))

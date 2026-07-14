@@ -255,19 +255,15 @@ func (d *SQLiteDialect) LegacyColumnMigrations() []ColumnMigration {
 		{`ALTER TABLE messages ADD COLUMN delete_batch_id TEXT`, "delete_batch_id"},
 		{`ALTER TABLE conversations ADD COLUMN title TEXT`, "title"},
 		{`ALTER TABLE conversations ADD COLUMN conversation_type TEXT NOT NULL DEFAULT 'email_thread'`, "conversation_type"},
-		// embed_gen: per-message vector-embedding watermark. NULL default
-		// means every legacy row reads as "needs embedding", which is
-		// correct — the scan-and-fill worker (and backstop) will embed and
-		// stamp them. No backfill.
+		// Retain the retired embedding watermark on upgraded archives so schema
+		// compatibility does not require a destructive table rewrite.
 		{`ALTER TABLE messages ADD COLUMN embed_gen INTEGER`, "embed_gen"},
-		// last_modified: row-level last-modified watermark, the embed
-		// worker's optimistic-CAS token. SQLite rejects a non-constant
+		// SQLite rejects a non-constant
 		// DEFAULT in ADD COLUMN ("Cannot add a column with non-constant
 		// default"), so the column is added with no default (existing rows
 		// get NULL) and InitSchema's backfillLastModified follows up with a
 		// one-shot `UPDATE ... SET last_modified = CURRENT_TIMESTAMP WHERE
-		// last_modified IS NULL` so the CAS token is a comparable value
-		// (NULL would never match `last_modified = ?`). Fresh DBs keep the
+		// last_modified IS NULL`. Fresh DBs keep the
 		// CREATE TABLE default in schema.sql, which IS allowed.
 		{`ALTER TABLE messages ADD COLUMN last_modified DATETIME`, "last_modified"},
 	}
@@ -374,8 +370,3 @@ func (d *SQLiteDialect) IsBusyError(err error) bool {
 	}
 	return false
 }
-
-// IsFTSValueTooLargeError always returns false for SQLite: FTS5 has no
-// per-value size limit analogous to PostgreSQL's tsvector "string is too long"
-// (SQLSTATE 54000), so the backfill never has a row to skip on SQLite.
-func (d *SQLiteDialect) IsFTSValueTooLargeError(err error) bool { return false }

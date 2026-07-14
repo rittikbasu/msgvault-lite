@@ -253,10 +253,6 @@ func (s *Syncer) processBatch(ctx context.Context, syncID, sourceID int64, listR
 			result.added++
 			summary.BytesDownloaded += int64(len(raw.Raw))
 		}
-
-		// Newly-persisted messages get embed_gen = NULL by column default,
-		// so the scan-and-fill embed worker picks them up automatically on
-		// its next run — no sync-time enqueue step is needed.
 	}
 
 	return result, nil
@@ -427,7 +423,7 @@ func (s *Syncer) Full(ctx context.Context, email string) (summary *gmail.SyncSum
 
 	// Checkpoint WAL after sync to fold it back into the main database.
 	// This prevents WAL accumulation across long sync sessions and ensures
-	// readers (e.g. build-cache) see a consistent database state.
+	// readers see a consistent database state.
 	if err := s.store.CheckpointWAL(); err != nil {
 		s.logger.Warn("wal checkpoint after sync failed", "error", err)
 	}
@@ -616,10 +612,8 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 	}, nil
 }
 
-// persistMessage stores a parsed message and all related data, returning
-// the internal message ID to callers. No vector-search enqueue happens
-// here: persisted rows leave embed_gen NULL (column default) and the
-// scan-and-fill worker discovers them later.
+// persistMessage stores a parsed message and all related data, returning the
+// internal message ID to callers.
 func (s *Syncer) persistMessage(data *messageData, labelMap map[string]int64) (int64, error) {
 	// Map Gmail label IDs to internal IDs
 	var labelIDs []int64

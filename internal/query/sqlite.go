@@ -894,104 +894,6 @@ func (e *SQLiteEngine) ListMessages(ctx context.Context, filter MessageFilter) (
 	return results, nil
 }
 
-// GetMessageSummariesByIDs returns summary rows (no body, no raw
-// MIME) for the supplied IDs in the same order as ids. Missing IDs
-// are silently dropped. Designed for vector/hybrid search hit
-// hydration: ~3 SQL round-trips total (one base query + one labels
-// batch) regardless of len(ids), versus 7N round-trips when callers
-// loop GetMessage per hit.
-func (e *SQLiteEngine) GetMessageSummariesByIDs(ctx context.Context, ids []int64) ([]MessageSummary, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	q := fmt.Sprintf(`
-		SELECT
-			m.id,
-			m.source_message_id,
-			m.conversation_id,
-			COALESCE(conv.source_conversation_id, ''),
-			COALESCE(m.subject, ''),
-			COALESCE(m.snippet, ''),
-			COALESCE(p_sender.email_address, ''),
-			%s,
-			COALESCE(p_sender.phone_number, ''),
-			m.sent_at,
-			COALESCE(m.size_estimate, 0),
-			m.has_attachments,
-			m.attachment_count,
-			m.deleted_from_source_at,
-			COALESCE(m.message_type, ''),
-			COALESCE(conv.title, '')
-		FROM messages m
-		%s
-		LEFT JOIN conversations conv ON conv.id = m.conversation_id
-		WHERE m.id IN (%s) AND %s
-	`, sqliteSenderNameExpr, sqliteSenderJoin, strings.Join(placeholders, ","), store.LiveMessagesWhere("m", true))
-
-	rows, err := e.queryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("get message summaries by ids: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	byID := make(map[int64]MessageSummary, len(ids))
-	for rows.Next() {
-		var msg MessageSummary
-		var sentAt sql.NullTime
-		var deletedAt sql.NullTime
-		if err := rows.Scan(
-			&msg.ID,
-			&msg.SourceMessageID,
-			&msg.ConversationID,
-			&msg.SourceConversationID,
-			&msg.Subject,
-			&msg.Snippet,
-			&msg.FromEmail,
-			&msg.FromName,
-			&msg.FromPhone,
-			&sentAt,
-			&msg.SizeEstimate,
-			&msg.HasAttachments,
-			&msg.AttachmentCount,
-			&deletedAt,
-			&msg.MessageType,
-			&msg.ConversationTitle,
-		); err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
-		}
-		if sentAt.Valid {
-			msg.SentAt = sentAt.Time
-		}
-		if deletedAt.Valid {
-			msg.DeletedAt = &deletedAt.Time
-		}
-		byID[msg.ID] = msg
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate messages: %w", err)
-	}
-
-	// Reassemble in caller-order so search rank is preserved.
-	results := make([]MessageSummary, 0, len(byID))
-	for _, id := range ids {
-		if m, ok := byID[id]; ok {
-			results = append(results, m)
-		}
-	}
-	if len(results) > 0 {
-		if err := e.fetchLabelsForMessages(ctx, results); err != nil {
-			return nil, fmt.Errorf("fetch labels: %w", err)
-		}
-	}
-	return results, nil
-}
-
 func (e *SQLiteEngine) fetchLabelsForMessages(ctx context.Context, messages []MessageSummary) error {
 	return fetchLabelsForMessageList(ctx, e.db, e.dialect.Rebind, "", messages)
 }
@@ -1414,9 +1316,8 @@ func (e *SQLiteEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFi
 // for the given internal message IDs. It enforces the same constraints
 // as GetGmailIDsByFilter: only live messages (LiveMessagesWhere — not
 // remote-deleted, not dedup-soft-deleted) from Gmail sources.
-// Non-qualifying IDs are silently dropped, mirroring
-// GetMessageSummariesByIDs semantics. The lookup is chunked so large
-// explicit selections stay under the backend's bind-parameter limit.
+// Non-qualifying IDs are silently dropped. The lookup is chunked so large
+// explicit selections stay under SQLite's bind-parameter limit.
 func (e *SQLiteEngine) GetGmailIDsByMessageIDs(ctx context.Context, ids []int64) ([]string, error) {
 	if len(ids) == 0 {
 		return nil, nil

@@ -219,9 +219,6 @@ func TestContextAwareReadsHonorCancellation(t *testing.T) {
 	_, err = st.GetMessageContext(ctx, msgID)
 	require.ErrorIs(err, context.Canceled, "GetMessageContext must honor a cancelled context")
 
-	_, err = st.GetMessagesSummariesByIDsContext(ctx, []int64{msgID})
-	require.ErrorIs(err, context.Canceled, "GetMessagesSummariesByIDsContext must honor a cancelled context")
-
 	_, err = st.GetStatsContext(ctx)
 	require.ErrorIs(err, context.Canceled, "GetStatsContext must honor a cancelled context")
 

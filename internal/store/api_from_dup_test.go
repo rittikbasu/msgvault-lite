@@ -139,11 +139,4 @@ func TestStoreAPI_MultipleFromRows_NoDuplication(t *testing.T) {
 		assert.NotEmpty(t, m.From, "GetMessage must resolve a sender from the single joined from-row")
 	})
 
-	t.Run("GetMessagesSummariesByIDs returns each id exactly once", func(t *testing.T) {
-		msgs, err := st.GetMessagesSummariesByIDs(ids)
-		require.NoError(err, "GetMessagesSummariesByIDs")
-		assert.Len(t, msgs, n, "summaries must hold every distinct id once")
-		assert.Equal(t, 1, countOccurrences(msgs, dupID),
-			"multi-from message must appear exactly once in summaries")
-	})
 }

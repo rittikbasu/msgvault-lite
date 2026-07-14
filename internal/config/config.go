@@ -15,7 +15,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"go.kenn.io/msgvault/internal/fileutil"
-	"go.kenn.io/msgvault/internal/vector"
 )
 
 const (
@@ -153,7 +152,6 @@ type Config struct {
 	Chat        ChatConfig        `toml:"chat"`
 	Server      ServerConfig      `toml:"server"`
 	Remote      RemoteConfig      `toml:"remote"`
-	Vector      vector.Config     `toml:"vector"`
 	Identity    IdentityConfig    `toml:"identity"`
 	Accounts    []AccountSchedule `toml:"accounts"`
 	SynctechSMS SynctechSMSConfig `toml:"synctech_sms"`
@@ -326,7 +324,6 @@ func NewDefaultConfig() *Config {
 		SynctechSMS: SynctechSMSConfig{Sources: []SynctechSMSSource{}},
 		GCal:        []GCalSource{},
 	}
-	cfg.Vector.ApplyDefaults()
 	cfg.Server.ApplyDefaults()
 	return cfg
 }
@@ -391,7 +388,6 @@ func Load(path, homeDir string) (*Config, error) {
 	cfg.Log.Dir = expandPath(cfg.Log.Dir)
 	cfg.OAuth.ClientSecrets = expandPath(cfg.OAuth.ClientSecrets)
 	cfg.OAuth.ServiceAccountKey = expandPath(cfg.OAuth.ServiceAccountKey)
-	cfg.Vector.DBPath = expandPath(cfg.Vector.DBPath)
 	cfg.Backup.Repo = expandPath(cfg.Backup.Repo)
 	for name, app := range cfg.OAuth.Apps {
 		app.ClientSecrets = expandPath(app.ClientSecrets)
@@ -406,7 +402,6 @@ func Load(path, homeDir string) (*Config, error) {
 		cfg.Log.Dir = resolveRelative(cfg.Log.Dir, cfg.HomeDir)
 		cfg.OAuth.ClientSecrets = resolveRelative(cfg.OAuth.ClientSecrets, cfg.HomeDir)
 		cfg.OAuth.ServiceAccountKey = resolveRelative(cfg.OAuth.ServiceAccountKey, cfg.HomeDir)
-		cfg.Vector.DBPath = resolveRelative(cfg.Vector.DBPath, cfg.HomeDir)
 		cfg.Backup.Repo = resolveRelative(cfg.Backup.Repo, cfg.HomeDir)
 		for name, app := range cfg.OAuth.Apps {
 			app.ClientSecrets = resolveRelative(app.ClientSecrets, cfg.HomeDir)
@@ -415,11 +410,6 @@ func Load(path, homeDir string) (*Config, error) {
 		}
 	}
 
-	// Re-apply numeric defaults over any zero-valued vector fields that
-	// survived decode (e.g. `max_retries = 0` or an omitted timeout).
-	// Preprocess booleans are *bool so pointer-nil still means "default";
-	// an explicit false in the file stays false.
-	cfg.Vector.ApplyDefaults()
 	cfg.Server.ApplyDefaults()
 	if err := cfg.Server.Validate(); err != nil {
 		return nil, err

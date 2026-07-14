@@ -2,7 +2,6 @@
   lib,
   buildGoModule,
   gitignoreSource,
-  sqlite,
 }:
 let
   version = "0.17.1";
@@ -18,18 +17,11 @@ buildGoModule {
 
   subPackages = [ "cmd/msgvault" ];
 
-  # mattn/go-sqlite3 and sqlite-vec both link C code. buildGoModule defaults
-  # CGO_ENABLED to 1, but be explicit.
+  # mattn/go-sqlite3 links C code. buildGoModule defaults CGO_ENABLED to 1,
+  # but be explicit.
   env.CGO_ENABLED = 1;
 
-  # sqlite-vec-go-bindings does `#include "sqlite3.h"` but ships no sqlite
-  # source — provide the system header via buildInputs.
-  buildInputs = [ sqlite ];
-
-  tags = [
-    "fts5"
-    "sqlite_vec"
-  ];
+  tags = [ "fts5" ];
 
   ldflags = [
     "-s"

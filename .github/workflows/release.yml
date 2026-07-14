@@ -30,11 +30,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # libsqlite3-dev provides sqlite3.h, which sqlite-vec's CGo
-          # binding includes unconditionally with -DSQLITE_CORE. mattn's
-          # sqlite3 driver still links its own bundled amalgamation at
-          # runtime; the header is only needed at compile time.
-          apt-get install -y gcc g++ make git curl tar gzip file binutils libsqlite3-dev
+          apt-get install -y gcc make git curl tar gzip file binutils
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -57,8 +53,8 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
 
           mkdir -p dist
-          LDFLAGS="-s -w -X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=v${VERSION} -X go.kenn.io/msgvault/cmd/msgvault/cmd.Commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-8) -X go.kenn.io/msgvault/cmd/msgvault/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -extldflags '-lstdc++ -lm'"
-          go build -tags "fts5 sqlite_vec" -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
+          LDFLAGS="-s -w -X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=v${VERSION} -X go.kenn.io/msgvault/cmd/msgvault/cmd.Commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-8) -X go.kenn.io/msgvault/cmd/msgvault/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -tags "fts5" -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
 
           echo "--- Binary info ---"
           file dist/msgvault
@@ -67,7 +63,6 @@ jobs:
           # Verify runtime version requirements are reasonable.
           echo "--- Runtime requirements ---"
           objdump -T dist/msgvault 2>/dev/null | grep -oP 'GLIBC_\d+\.\d+' | sort -uV | tail -1 || true
-          objdump -T dist/msgvault 2>/dev/null | grep -oP 'GLIBCXX_\d+\.\d+(\.\d+)?' | sort -uV | tail -1 || true
 
           # Smoke test
           echo "--- Smoke test ---"
@@ -112,7 +107,7 @@ jobs:
 
           mkdir -p dist
           LDFLAGS="-s -w -X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=v${VERSION} -X go.kenn.io/msgvault/cmd/msgvault/cmd.Commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-8) -X go.kenn.io/msgvault/cmd/msgvault/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          go build -tags "fts5 sqlite_vec" -trimpath -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
+          go build -tags "fts5" -trimpath -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
 
           echo "--- Binary info ---"
           file dist/msgvault
@@ -158,24 +153,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # sqlite-vec's CGo bindings need sqlite3.h at compile time.
-      - name: Install sqlite3 dev headers
-        shell: pwsh
-        run: |
-          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-sqlite3
-
       - name: Build
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '1'
-          CGO_CFLAGS: "-IC:/msys64/mingw64/include"
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
 
           mkdir -p dist
           LDFLAGS="-s -w -X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=v${VERSION} -X go.kenn.io/msgvault/cmd/msgvault/cmd.Commit=$(printf '%s' "$GITHUB_SHA" | cut -c1-8) -X go.kenn.io/msgvault/cmd/msgvault/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          go build -tags "fts5 sqlite_vec" -trimpath -ldflags="$LDFLAGS" -o dist/msgvault.exe ./cmd/msgvault
+          go build -tags "fts5" -trimpath -ldflags="$LDFLAGS" -o dist/msgvault.exe ./cmd/msgvault
 
           # Smoke test
           echo "--- Smoke test ---"

@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	messagesLimit  int
-	messagesOffset int
-	messagesJSON   bool
+	messagesLimit   int
+	messagesOffset  int
+	messagesAfterID int64 = -1
+	messagesJSON    bool
 )
 
 var messagesCmd = &cobra.Command{
@@ -31,6 +32,15 @@ var messagesCmd = &cobra.Command{
 		if messagesOffset < 0 {
 			return usageErr(cmd, fmt.Errorf("--offset must be non-negative, got %d", messagesOffset))
 		}
+		if cmd.Flags().Changed("after-id") && messagesAfterID < 0 {
+			return usageErr(cmd, fmt.Errorf("--after-id must be non-negative, got %d", messagesAfterID))
+		}
+		if messagesAfterID >= 0 && messagesOffset != 0 {
+			return usageErr(cmd, fmt.Errorf("--offset cannot be used with --after-id"))
+		}
+		if messagesAfterID >= 0 && !messagesJSON {
+			return usageErr(cmd, fmt.Errorf("--after-id requires --json"))
+		}
 		return runMessages(cmd)
 	},
 }
@@ -41,6 +51,35 @@ func runMessages(cmd *cobra.Command) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = s.Close() }()
+
+	if messagesAfterID >= 0 {
+		messages, hasMore, err := s.ListMessagesAfterIDContext(cmd.Context(), messagesAfterID, messagesLimit)
+		if err != nil {
+			return fmt.Errorf("list messages after ID: %w", err)
+		}
+		highWaterID, err := s.MessageHighWaterIDContext(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("read message high-water ID: %w", err)
+		}
+		items := make([]jsonMessageSummary, len(messages))
+		for i, message := range messages {
+			items[i] = apiMessageSummary(message)
+		}
+		return writeJSON(cmd.OutOrStdout(), jsonListResponse{
+			SchemaVersion: jsonSchemaVersion,
+			Items:         items,
+			Page: jsonPage{
+				Limit:    messagesLimit,
+				Offset:   0,
+				Returned: len(items),
+				HasMore:  hasMore,
+			},
+			Cursor: &jsonCursor{
+				AfterID:     messagesAfterID,
+				HighWaterID: highWaterID,
+			},
+		})
+	}
 
 	messages, total, err := s.ListMessagesContext(cmd.Context(), messagesOffset, messagesLimit)
 	if err != nil {
@@ -101,5 +140,6 @@ func init() {
 	rootCmd.AddCommand(messagesCmd)
 	messagesCmd.Flags().IntVarP(&messagesLimit, "limit", "n", 50, "Maximum number of messages (max 200)")
 	messagesCmd.Flags().IntVar(&messagesOffset, "offset", 0, "Skip first N messages")
+	messagesCmd.Flags().Int64Var(&messagesAfterID, "after-id", -1, "Return messages with permanent archive IDs greater than N (requires --json)")
 	messagesCmd.Flags().BoolVar(&messagesJSON, flagJSON, false, "Output stable JSON schema v1")
 }

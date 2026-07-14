@@ -115,3 +115,40 @@ func TestMessagesReadsSQLiteDirectly(t *testing.T) {
 	assert.Contains(t, out.String(), "Needle subject")
 	assert.Contains(t, out.String(), "Showing 1 of 1 messages.")
 }
+
+func TestMessagesAfterIDReturnsCursorJSON(t *testing.T) {
+	dataDir, firstID := seedDirectCLIArchive(t)
+	st, err := store.Open(filepath.Join(dataDir, "msgvault.db"))
+	require.NoError(t, err)
+	source, err := st.GetOrCreateSource("gmail", "user@example.com")
+	require.NoError(t, err)
+	conversationID, err := st.EnsureConversation(source.ID, "thread-1", "Needle thread")
+	require.NoError(t, err)
+	secondID, err := st.UpsertMessage(&store.Message{
+		ConversationID:  conversationID,
+		SourceID:        source.ID,
+		SourceMessageID: "gmail-needle-2",
+		SentAt:          sql.NullTime{Time: time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC), Valid: true},
+		Subject:         sql.NullString{String: "Second subject", Valid: true},
+	})
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	oldLimit, oldOffset, oldAfterID, oldJSON := messagesLimit, messagesOffset, messagesAfterID, messagesJSON
+	messagesLimit, messagesOffset, messagesAfterID, messagesJSON = 1, 0, firstID, true
+	t.Cleanup(func() {
+		messagesLimit, messagesOffset, messagesAfterID, messagesJSON = oldLimit, oldOffset, oldAfterID, oldJSON
+	})
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
+	require.NoError(t, runMessages(cmd))
+
+	assert.Contains(t, out.String(), `"id": `+formatCount(secondID))
+	assert.Contains(t, out.String(), `"has_more": false`)
+	assert.Contains(t, out.String(), `"after_id": `+formatCount(firstID))
+	assert.Contains(t, out.String(), `"high_water_id": `+formatCount(secondID))
+	assert.NotContains(t, out.String(), `"total"`)
+}

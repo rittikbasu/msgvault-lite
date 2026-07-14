@@ -144,6 +144,86 @@ func (s *Store) ListMessagesContext(ctx context.Context, offset, limit int) ([]A
 	return messages, total, nil
 }
 
+// ListMessagesAfterID returns live messages with permanent archive IDs greater
+// than afterID, ordered from oldest cursor position to newest. hasMore is true
+// when another bounded page exists.
+func (s *Store) ListMessagesAfterID(afterID int64, limit int) ([]APIMessage, bool, error) {
+	return s.ListMessagesAfterIDContext(context.Background(), afterID, limit)
+}
+
+// ListMessagesAfterIDContext is the context-aware cursor form of
+// ListMessagesAfterID.
+func (s *Store) ListMessagesAfterIDContext(ctx context.Context, afterID int64, limit int) ([]APIMessage, bool, error) {
+	if afterID < 0 {
+		return nil, false, fmt.Errorf("after ID must be non-negative: %d", afterID)
+	}
+	if limit <= 0 {
+		return nil, false, fmt.Errorf("limit must be positive: %d", limit)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.source_message_id, '') as source_message_id,
+			COALESCE(m.conversation_id, 0) as conversation_id,
+			COALESCE(c.source_conversation_id, '') as source_conversation_id,
+			COALESCE(m.subject, '') as subject,
+			%s,
+			COALESCE(m.sent_at, m.internal_date) as sent_at,
+			COALESCE(m.snippet, '') as snippet,
+			m.has_attachments,
+			m.size_estimate
+		FROM messages m
+		LEFT JOIN message_recipients mr ON mr.id = (
+			SELECT mr2.id FROM message_recipients mr2
+			WHERE mr2.message_id = m.id AND mr2.recipient_type = 'from'
+			ORDER BY mr2.id LIMIT 1
+		)
+		LEFT JOIN participants p ON p.id = COALESCE(m.sender_id, mr.participant_id)
+		LEFT JOIN conversations c ON c.id = m.conversation_id
+		WHERE %s AND m.id > ?
+		ORDER BY m.id ASC
+		LIMIT ?
+	`, participantSummarySenderSQL, LiveMessagesWhere("m", true))
+
+	rows, err := s.db.QueryContext(ctx, query, afterID, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, ids, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+		ids = ids[:limit]
+	}
+	if len(ids) > 0 {
+		if err := s.batchPopulateContext(ctx, messages, ids); err != nil {
+			return nil, false, err
+		}
+	}
+	return messages, hasMore, nil
+}
+
+// MessageHighWaterID returns the greatest permanent message ID allocated in
+// the archive, including tombstoned rows.
+func (s *Store) MessageHighWaterID() (int64, error) {
+	return s.MessageHighWaterIDContext(context.Background())
+}
+
+// MessageHighWaterIDContext is the context-aware form of MessageHighWaterID.
+func (s *Store) MessageHighWaterIDContext(ctx context.Context) (int64, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM messages`).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
 // ErrMessageNotFound is returned by GetMessage when no message row
 // matches the given ID. Wrapped via fmt.Errorf("...: %w", ...) so
 // callers can use errors.Is to distinguish absence from real DB errors.

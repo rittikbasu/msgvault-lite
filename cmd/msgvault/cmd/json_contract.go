@@ -30,6 +30,12 @@ type jsonListResponse struct {
 	SchemaVersion int                  `json:"schema_version"`
 	Items         []jsonMessageSummary `json:"items"`
 	Page          jsonPage             `json:"page"`
+	Cursor        *jsonCursor          `json:"cursor,omitempty"`
+}
+
+type jsonCursor struct {
+	AfterID     int64 `json:"after_id"`
+	HighWaterID int64 `json:"high_water_id"`
 }
 
 type jsonMessageSummary struct {

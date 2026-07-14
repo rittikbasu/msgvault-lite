@@ -75,6 +75,28 @@ func newVerifyResult(email string, archiveAccountFound bool, integrityOK *bool, 
 	}
 }
 
+func verifyAcceptanceError(result verifyResult) error {
+	if !result.ArchiveAccountFound {
+		return errors.New("Gmail account not found in archive")
+	}
+	if result.DatabaseIntegrityOK != nil && !*result.DatabaseIntegrityOK {
+		return errors.New("database integrity check failed")
+	}
+	if result.Difference != 0 {
+		return fmt.Errorf("archive count mismatch: Gmail and archive differ by %d messages", result.Difference)
+	}
+	if result.RawMIMEMessages != result.ArchivedMessages {
+		return fmt.Errorf("raw MIME incomplete: %d of %d archived messages", result.RawMIMEMessages, result.ArchivedMessages)
+	}
+	if result.SampleInterrupted {
+		return errors.New("verification interrupted")
+	}
+	if result.SampleErrors != 0 || result.SampleVerified != result.SampleSize {
+		return fmt.Errorf("sample verification failed: %d errors, %d of %d verified", result.SampleErrors, result.SampleVerified, result.SampleSize)
+	}
+	return nil
+}
+
 var verifyCmd = &cobra.Command{
 	Use:   "verify <email>",
 	Short: "Verify archive integrity against Gmail",
@@ -125,7 +147,6 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 
 	// Run SQLite integrity_check before any Gmail work. Users with a corrupt
 	// database should see the repair hint even if OAuth or the network fails.
-	var dbCorrupt bool
 	var dbIntegrityOK *bool
 	if !verifySkipDBCheck {
 		emitln("Running database integrity check...")
@@ -138,7 +159,6 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 			dbIntegrityOK = &ok
 			emitln("  Database integrity: OK")
 		} else {
-			dbCorrupt = true
 			ok := false
 			dbIntegrityOK = &ok
 			emitf("  Database integrity: FAILED (%d errors)\n", len(integrityErrors))
@@ -240,24 +260,19 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("get source: %w", err)
 	}
 	if source == nil {
+		result := newVerifyResult(
+			profile.EmailAddress, false, dbIntegrityOK, profile.MessagesTotal, 0, 0,
+			0, 0, 0, false,
+		)
 		if verifyJSON {
-			if err := printJSON(newVerifyResult(
-				profile.EmailAddress, false, dbIntegrityOK, profile.MessagesTotal, 0, 0,
-				0, 0, 0, false,
-			)); err != nil {
+			if err := printJSON(result); err != nil {
 				return err
 			}
-			if dbCorrupt {
-				return errors.New("database integrity check failed")
-			}
-			return nil
+			return verifyAcceptanceError(result)
 		}
 		fmt.Printf("Gmail account %s not found in database.\n", email)
 		fmt.Println("Run 'sync-full' first to populate the archive.")
-		if dbCorrupt {
-			return errors.New("database integrity check failed")
-		}
-		return nil
+		return verifyAcceptanceError(result)
 	}
 
 	// Count local messages
@@ -363,20 +378,16 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	emitln()
 	emitln("Verification complete.")
 
+	result := newVerifyResult(
+		profile.EmailAddress, true, dbIntegrityOK, gmailTotal, archiveCount, withRaw,
+		sampleSize, sampleVerified, sampleErrorCount, sampleInterrupted,
+	)
 	if verifyJSON {
-		if err := printJSON(newVerifyResult(
-			profile.EmailAddress, true, dbIntegrityOK, gmailTotal, archiveCount, withRaw,
-			sampleSize, sampleVerified, sampleErrorCount, sampleInterrupted,
-		)); err != nil {
+		if err := printJSON(result); err != nil {
 			return err
 		}
 	}
-
-	if dbCorrupt {
-		return errors.New("database integrity check failed")
-	}
-
-	return nil
+	return verifyAcceptanceError(result)
 }
 
 // runIntegrityCheck runs PRAGMA integrity_check on the database and returns
@@ -402,9 +413,9 @@ func runIntegrityCheck(s *store.Store) ([]string, error) {
 }
 
 // printIntegrityRecoveryHint prints repair guidance tailored to the kind of
-// corruption reported. FTS5 shadow-table corruption is fixable with the
-// lightweight `rebuild-fts` command; core B-tree corruption needs `.recover`,
-// which requires free disk roughly equal to the database size.
+// corruption reported. Search-index corruption can be recovered from a
+// known-good backup or a clean redownload; core B-tree corruption may also be
+// recoverable with SQLite's .recover command.
 func printIntegrityRecoveryHint(integrityErrors []string) {
 	var ftsErrs, coreErrs int
 	for _, e := range integrityErrors {
@@ -421,10 +432,8 @@ func printIntegrityRecoveryHint(integrityErrors []string) {
 
 	if ftsErrs > 0 {
 		fmt.Println("  Search index (FTS5) corruption:")
-		fmt.Println("    Run: msgvault rebuild-fts")
-		fmt.Println("    Drops and recreates messages_fts from the core tables.")
-		fmt.Println("    SQLite's 'rebuild' pragma reads from the corrupt shadow")
-		fmt.Println("    tables and cannot clear this state.")
+		fmt.Println("    Restore a known-good backup, or create a fresh archive with")
+		fmt.Println("    --home <new-directory> and run sync-full.")
 		fmt.Println()
 	}
 

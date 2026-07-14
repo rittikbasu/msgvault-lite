@@ -148,7 +148,7 @@ func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(st
 	if err != nil {
 		if ctx.Err() != nil {
 			fmt.Println("\nSync interrupted. Run again to resume.")
-			return nil
+			return syncInterruptionError(ctx)
 		}
 		// The history baseline is gone (Gmail keeps only ~7 days), so an
 		// incremental sync can never succeed again for this account. Fall
@@ -182,6 +182,10 @@ func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(st
 	)
 
 	return nil
+}
+
+func syncInterruptionError(ctx context.Context) error {
+	return fmt.Errorf("sync interrupted: %w", ctx.Err())
 }
 
 func init() {

@@ -216,7 +216,7 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 			} else {
 				fmt.Println("\nSync interrupted. Run again to resume.")
 			}
-			return nil
+			return syncInterruptionError(ctx)
 		}
 		return fmt.Errorf("sync failed: %w", err)
 	}

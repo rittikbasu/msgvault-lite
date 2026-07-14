@@ -377,6 +377,7 @@ func (c *Client) ListLabels(ctx context.Context) ([]*Label, error) {
 func (c *Client) ListMessages(ctx context.Context, query string, pageToken string) (*MessageListResponse, error) {
 	params := url.Values{}
 	params.Set("maxResults", "500")
+	params.Set("includeSpamTrash", "true")
 	if query != "" {
 		params.Set("q", query)
 	}

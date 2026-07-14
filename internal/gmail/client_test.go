@@ -413,6 +413,30 @@ func TestGetMessagesRawBatch_LogLevels(t *testing.T) {
 	require.Error(batch[2].Err, "batch[2].Err")
 }
 
+func TestListMessagesIncludesSpamAndTrash(t *testing.T) {
+	requests := make(chan map[string][]string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.URL.Query()
+		_ = json.NewEncoder(w).Encode(map[string]any{"messages": []any{}})
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		httpClient:  &http.Client{Transport: &rewriteTransport{base: srv.URL, wrapped: http.DefaultTransport}},
+		userID:      "me",
+		concurrency: 1,
+		logger:      slog.Default(),
+		rateLimiter: NewRateLimiter(1000),
+	}
+	_, err := client.ListMessages(context.Background(), "label:all", "next-page")
+	require.NoError(t, err)
+
+	params := <-requests
+	assert.Equal(t, []string{"true"}, params["includeSpamTrash"])
+	assert.Equal(t, []string{"label:all"}, params["q"])
+	assert.Equal(t, []string{"next-page"}, params["pageToken"])
+}
+
 // rewriteTransport rewrites requests from the Gmail API baseURL to a test server URL.
 type rewriteTransport struct {
 	base    string // test server URL

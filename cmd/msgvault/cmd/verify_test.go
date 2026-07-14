@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,6 +158,73 @@ func TestNewVerifyResult(t *testing.T) {
 			assert.Equal(tc.interrupted, got.SampleInterrupted)
 		})
 	}
+}
+
+func TestVerifyAcceptanceError(t *testing.T) {
+	integrityOK := true
+	integrityFailed := false
+	tests := []struct {
+		name    string
+		result  verifyResult
+		wantErr string
+	}{
+		{
+			name:   "healthy",
+			result: newVerifyResult("user@example.com", true, &integrityOK, 10, 10, 10, 5, 5, 0, false),
+		},
+		{
+			name:    "missing account",
+			result:  newVerifyResult("user@example.com", false, &integrityOK, 10, 0, 0, 0, 0, 0, false),
+			wantErr: "not found",
+		},
+		{
+			name:    "database corruption",
+			result:  newVerifyResult("user@example.com", true, &integrityFailed, 10, 10, 10, 5, 5, 0, false),
+			wantErr: "integrity",
+		},
+		{
+			name:    "count mismatch",
+			result:  newVerifyResult("user@example.com", true, &integrityOK, 10, 9, 9, 5, 5, 0, false),
+			wantErr: "count mismatch",
+		},
+		{
+			name:    "missing raw MIME",
+			result:  newVerifyResult("user@example.com", true, &integrityOK, 10, 10, 9, 5, 5, 0, false),
+			wantErr: "raw MIME",
+		},
+		{
+			name:    "sample error",
+			result:  newVerifyResult("user@example.com", true, &integrityOK, 10, 10, 10, 5, 4, 1, false),
+			wantErr: "sample",
+		},
+		{
+			name:    "interrupted",
+			result:  newVerifyResult("user@example.com", true, &integrityOK, 10, 10, 10, 5, 2, 0, true),
+			wantErr: "interrupted",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyAcceptanceError(tc.result)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestSyncInterruptionErrorPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := syncInterruptionError(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorContains(t, err, "sync interrupted")
 }
 
 func TestVerifyDoesNotCreateMissingArchive(t *testing.T) {

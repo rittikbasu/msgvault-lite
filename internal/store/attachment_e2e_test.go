@@ -66,7 +66,7 @@ func (c *attachmentCorpus) addAttachment(gmailID, filename, hash string) {
 	msgID, ok := c.msgRows[gmailID]
 	require.Truef(c.t, ok, "addAttachment: unknown gmail id %q", gmailID)
 	storagePath := hash[:2] + "/" + hash
-	err := c.store.UpsertAttachment(msgID, filename, "application/pdf",
+	err := c.store.UpsertAttachment(msgID, 0, filename, "application/pdf",
 		storagePath, hash, 100)
 	require.NoErrorf(c.t, err, "UpsertAttachment(%s, %s)", gmailID, filename)
 }
@@ -123,8 +123,8 @@ func TestGetMessageIncludesAttachmentWithNullableMetadata(t *testing.T) {
 
 	var attachmentID int64
 	err = st.DB().QueryRow(
-		st.Rebind(`INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-			VALUES (?, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP)
+		st.Rebind(`INSERT INTO attachments (message_id, part_index, filename, mime_type, storage_path, content_hash, size, created_at)
+			VALUES (?, 0, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP)
 			RETURNING id`),
 		msgID, nil, nil, "legacy/path.bin", nil,
 	).Scan(&attachmentID)
@@ -142,8 +142,7 @@ func TestGetMessageIncludesAttachmentWithNullableMetadata(t *testing.T) {
 
 // TestAttachment_E2E_MultiMessageDedup verifies that multiple messages within
 // a single source can reference the same content_hash via UpsertAttachment
-// and that the helper is idempotent (re-upserting the same (message_id,
-// content_hash) pair is a no-op).
+// and that the helper is idempotent when re-upserting the same MIME part.
 func TestAttachment_E2E_MultiMessageDedup(t *testing.T) {
 	assert := assert.New(t)
 	c := newAttachmentCorpus(t)
@@ -159,7 +158,7 @@ func TestAttachment_E2E_MultiMessageDedup(t *testing.T) {
 	// One row per message, all referencing the same hash.
 	assert.Equal(3, c.attachmentRowsForHash(hashShared), "rows for hashShared")
 
-	// Idempotent re-upsert: existing (message_id, content_hash) is a no-op.
+	// Idempotent re-upsert of part zero updates in place.
 	c.addAttachment("msg-2", "shared.pdf", hashShared)
 	assert.Equal(3, c.attachmentRowsForHash(hashShared), "rows for hashShared after re-upsert")
 
@@ -225,14 +224,14 @@ func TestAttachment_E2E_NullAndEmptyHashesIgnored(t *testing.T) {
 
 	// Attachment with NULL content_hash — must NOT appear in unique set.
 	_, err := c.store.DB().Exec(c.store.Rebind(fmt.Sprintf(
-		`INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-		 VALUES (?, 'null-hash.pdf', 'application/pdf', 'nn/nullpath', NULL, 0, %s)`,
+		`INSERT INTO attachments (message_id, part_index, filename, mime_type, storage_path, content_hash, size, created_at)
+		 VALUES (?, 0, 'null-hash.pdf', 'application/pdf', 'nn/nullpath', NULL, 0, %s)`,
 		"CURRENT_TIMESTAMP",
 	)), c.msgRows["msg-a2"])
 	require.NoError(err, "insert null-hash attachment")
 
 	// Attachment with empty storage_path — also excluded.
-	err = c.store.UpsertAttachment(c.msgRows["msg-a3"], "empty.pdf",
+	err = c.store.UpsertAttachment(c.msgRows["msg-a3"], 0, "empty.pdf",
 		"application/pdf", "", "emptypathhash", 0)
 	require.NoError(err, "UpsertAttachment(empty)")
 

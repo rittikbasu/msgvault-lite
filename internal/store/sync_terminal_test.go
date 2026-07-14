@@ -19,7 +19,7 @@ func TestCompleteSyncRejectsSupersededRun(t *testing.T) {
 
 	err = f.Store.CompleteSync(firstID, "history-1")
 	require.Error(err, "superseded sync must not be completed")
-	assert.ErrorContains(err, "running sync run")
+	require.ErrorContains(err, "running sync run")
 
 	var status string
 	err = f.Store.DB().QueryRow(`SELECT status FROM sync_runs WHERE id = ?`, firstID).Scan(&status)

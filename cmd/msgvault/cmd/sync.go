@@ -35,9 +35,7 @@ Examples:
   msgvault sync
   msgvault sync you@gmail.com`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSyncIncrementalLocal(cmd, args)
-	},
+	RunE: runSyncIncrementalLocal,
 }
 
 func runSyncIncrementalLocal(cmd *cobra.Command, args []string) error {

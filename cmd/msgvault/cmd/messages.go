@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -36,10 +37,10 @@ var messagesCmd = &cobra.Command{
 			return usageErr(cmd, fmt.Errorf("--after-id must be non-negative, got %d", messagesAfterID))
 		}
 		if messagesAfterID >= 0 && messagesOffset != 0 {
-			return usageErr(cmd, fmt.Errorf("--offset cannot be used with --after-id"))
+			return usageErr(cmd, errors.New("--offset cannot be used with --after-id"))
 		}
 		if messagesAfterID >= 0 && !messagesJSON {
-			return usageErr(cmd, fmt.Errorf("--after-id requires --json"))
+			return usageErr(cmd, errors.New("--after-id requires --json"))
 		}
 		return runMessages(cmd)
 	},

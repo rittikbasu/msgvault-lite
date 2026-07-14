@@ -54,11 +54,7 @@ const sqliteSenderJoin = `LEFT JOIN message_recipients mr_from ON mr_from.id = (
 		LEFT JOIN participants p_sender ON p_sender.id = COALESCE(mr_from.participant_id, m.sender_id)`
 
 // rebindFunc lets callers transform a query written with ? placeholders.
-// SQLite callers use noopRebind.
 type rebindFunc func(string) string
-
-// noopRebind passes the query through unchanged.
-func noopRebind(q string) string { return q }
 
 // fetchLabelsForMessageList adds labels to message summaries using a batch query.
 // tablePrefix optionally qualifies table names; SQLite callers pass "".

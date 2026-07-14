@@ -33,6 +33,9 @@ func tryAcquireWriteOwnerLock(dataDir string) (*writeOwnerLock, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir for write lock: %w", err)
 	}
+	if err := os.Chmod(dataDir, 0o700); err != nil { //nolint:gosec // directory must be owner-only and traversable
+		return nil, fmt.Errorf("secure data dir for write lock: %w", err)
+	}
 
 	path := writeOwnerLockPath(dataDir)
 	lock := flock.New(path)

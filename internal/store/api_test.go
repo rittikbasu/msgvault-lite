@@ -338,21 +338,6 @@ func TestListMessagesCcBcc(t *testing.T) {
 	assert.Equal("bcc@example.com", messages[0].Bcc[0], "Bcc[0]")
 }
 
-// TestListAndSearchSurfacePhoneAndIdentifierParticipants exercises the
-// store-backed list/search path for SMS-style participants that have no
-// email_address: malformed/imported MIME can still provide a display name
-// without a usable address, so identifier-
-// EnsureParticipantByIdentifier). Before the participantDisplaySQL fix
-// these rendered with blank From/To because the SELECT only read
-// p.email_address.
-func sourceMessageIDForTest(t *testing.T, st *Store, id int64) string {
-	t.Helper()
-	var sourceMsgID string
-	require.NoError(t, st.DB().QueryRow(st.Rebind(`SELECT source_message_id FROM messages WHERE id = ?`), id).Scan(&sourceMsgID),
-		"lookup source_message_id")
-	return sourceMsgID
-}
-
 func TestSearchMessagesLikeLiteralWildcards(t *testing.T) {
 	st := openTestStore(t)
 

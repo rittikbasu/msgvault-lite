@@ -570,5 +570,4 @@ func TestGetTokenSourceWithReauth(t *testing.T) {
 		require.ErrorContains(t, err, "add-account x@gmail.com --force")
 		require.ErrorContains(t, err, "add-account x@gmail.com --headless")
 	})
-
 }

@@ -10,11 +10,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/config"
+	"go.kenn.io/msgvault/internal/store"
 )
 
 // TestIsFTSIntegrityError_Classification verifies that the hint-classifier
-// cleanly separates FTS5 shadow-table errors (which rebuild-fts can fix)
-// from core-table errors (which need .recover). Messages come from real
+// cleanly separates FTS5 shadow-table errors from core-table errors. Messages come from real
 // PRAGMA integrity_check output; the shapes below are what users will see.
 func TestIsFTSIntegrityError_Classification(t *testing.T) {
 	tests := []struct {
@@ -47,6 +47,30 @@ func TestIsFTSIntegrityError_Classification(t *testing.T) {
 		got := isFTSIntegrityError(tc.msg)
 		assert.Equal(t, tc.wantFT, got, "isFTSIntegrityError(%q)", tc.msg)
 	}
+}
+
+func TestRunIntegrityCheckDetectsForeignKeyViolations(t *testing.T) {
+	require := require.New(t)
+	st, err := store.OpenForTest(filepath.Join(t.TempDir(), "msgvault.db"))
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(st.Close()) })
+	require.NoError(st.InitSchema())
+	st.DB().SetMaxOpenConns(1)
+
+	_, err = st.DB().Exec("PRAGMA foreign_keys = OFF")
+	require.NoError(err)
+	_, err = st.DB().Exec(`
+		INSERT INTO attachments (message_id, part_index, storage_path)
+		VALUES (999999, 0, 'orphan')
+	`)
+	require.NoError(err)
+	_, err = st.DB().Exec("PRAGMA foreign_keys = ON")
+	require.NoError(err)
+
+	errs, err := runIntegrityCheck(st)
+	require.NoError(err)
+	require.Len(errs, 1)
+	assert.Contains(t, errs[0], "foreign key violation")
 }
 
 // TestNewVerifyResult checks the machine-readable summary math behind
@@ -223,7 +247,7 @@ func TestSyncInterruptionErrorPreservesCancellation(t *testing.T) {
 
 	err := syncInterruptionError(ctx)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.ErrorContains(t, err, "sync interrupted")
 }
 
@@ -235,7 +259,7 @@ func TestVerifyDoesNotCreateMissingArchive(t *testing.T) {
 
 	err := runVerifyLocal(&cobra.Command{}, []string{"user@gmail.com"})
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "open database read-only")
+	require.ErrorContains(t, err, "open database read-only")
 
 	_, statErr := os.Stat(filepath.Join(tmpDir, "msgvault.db"))
 	assert.ErrorIs(t, statErr, os.ErrNotExist)

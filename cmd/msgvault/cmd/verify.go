@@ -77,7 +77,7 @@ func newVerifyResult(email string, archiveAccountFound bool, integrityOK *bool, 
 
 func verifyAcceptanceError(result verifyResult) error {
 	if !result.ArchiveAccountFound {
-		return errors.New("Gmail account not found in archive")
+		return errors.New("gmail account not found in archive")
 	}
 	if result.DatabaseIntegrityOK != nil && !*result.DatabaseIntegrityOK {
 		return errors.New("database integrity check failed")
@@ -115,9 +115,7 @@ Examples:
   msgvault verify you@gmail.com --skip-db-check
   msgvault verify you@gmail.com --json`,
 	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runVerifyLocal(cmd, args)
-	},
+	RunE: runVerifyLocal,
 }
 
 func runVerifyLocal(cmd *cobra.Command, args []string) error {
@@ -390,14 +388,13 @@ func runVerifyLocal(cmd *cobra.Command, args []string) error {
 	return verifyAcceptanceError(result)
 }
 
-// runIntegrityCheck runs PRAGMA integrity_check on the database and returns
-// any error strings. An empty slice means the database is healthy.
+// runIntegrityCheck checks SQLite structure and foreign-key relationships.
+// An empty slice means the database is healthy.
 func runIntegrityCheck(s *store.Store) ([]string, error) {
 	rows, err := s.DB().Query("PRAGMA integrity_check(100)")
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
 	var integErrs []string
 	for rows.Next() {
@@ -408,6 +405,30 @@ func runIntegrityCheck(s *store.Store) ([]string, error) {
 		if result != "ok" {
 			integErrs = append(integErrs, result)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	rows, err = s.DB().Query("PRAGMA foreign_key_check")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var table, parent string
+		var rowID, foreignKeyID int64
+		if err := rows.Scan(&table, &rowID, &parent, &foreignKeyID); err != nil {
+			return nil, err
+		}
+		integErrs = append(integErrs, fmt.Sprintf(
+			"foreign key violation: table=%s rowid=%d parent=%s foreign_key=%d",
+			table, rowID, parent, foreignKeyID,
+		))
 	}
 	return integErrs, rows.Err()
 }

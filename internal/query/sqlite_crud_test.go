@@ -263,8 +263,8 @@ func TestGetMessageWithURLBackedAttachment(t *testing.T) {
 	env := newTestEnv(t)
 
 	_, err := env.DB.Exec(`
-		INSERT INTO attachments (message_id, filename, mime_type, size, content_hash, storage_path)
-		VALUES (1, 'deck.pptx', 'reference', 0, '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'https://sp/deck.pptx')
+		INSERT INTO attachments (message_id, part_index, filename, mime_type, size, content_hash, storage_path)
+		VALUES (1, 0, 'deck.pptx', 'reference', 0, '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'https://sp/deck.pptx')
 	`)
 	require.NoError(err, "insert URL-backed attachment")
 
@@ -282,8 +282,8 @@ func TestGetAttachmentClearsURLBackedContentHash(t *testing.T) {
 	env := newTestEnv(t)
 
 	result, err := env.DB.Exec(`
-		INSERT INTO attachments (message_id, filename, mime_type, size, content_hash, storage_path)
-		VALUES (1, 'recording.mp4', 'video/mp4', 0, 'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd', 'https://sp/recording.mp4')
+		INSERT INTO attachments (message_id, part_index, filename, mime_type, size, content_hash, storage_path)
+		VALUES (1, 0, 'recording.mp4', 'video/mp4', 0, 'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd', 'https://sp/recording.mp4')
 	`)
 	require.NoError(err, "insert URL-backed attachment")
 	attID, err := result.LastInsertId()

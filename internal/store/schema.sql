@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS message_recipients (
 CREATE TABLE IF NOT EXISTS attachments (
     id INTEGER PRIMARY KEY,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    part_index INTEGER NOT NULL,
 
     -- File identification
     filename TEXT,
@@ -264,9 +265,8 @@ CREATE INDEX IF NOT EXISTS idx_message_recipients_participant ON message_recipie
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_msg_content_hash
-    ON attachments(message_id, content_hash)
-    WHERE content_hash IS NOT NULL AND content_hash != '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_message_part
+    ON attachments(message_id, part_index);
 CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(content_hash);
 CREATE INDEX IF NOT EXISTS idx_attachments_storage_path ON attachments(storage_path);
 

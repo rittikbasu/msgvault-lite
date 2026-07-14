@@ -96,9 +96,9 @@ func TestFreshArchiveRemovedCompatibilityColumns(t *testing.T) {
 
 	_, err = f.DB().Exec(`INSERT INTO sources (source_type, identifier) VALUES ('imap', 'imap@example.com')`)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "CHECK constraint failed")
+	require.ErrorContains(t, err, "CHECK constraint failed")
 
 	_, err = f.DB().Exec(`INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES (1, 1, 'mention')`)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "CHECK constraint failed")
+	require.ErrorContains(t, err, "CHECK constraint failed")
 }

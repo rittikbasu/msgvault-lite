@@ -137,5 +137,4 @@ func TestStoreAPI_MultipleFromRows_NoDuplication(t *testing.T) {
 		assert.Equal(t, dupID, m.ID, "GetMessage id")
 		assert.NotEmpty(t, m.From, "GetMessage must resolve a sender from the single joined from-row")
 	})
-
 }

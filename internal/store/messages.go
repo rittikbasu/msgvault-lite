@@ -87,18 +87,28 @@ func (s *Store) MessageExistsBatch(sourceID int64, sourceMessageIDs []string) (m
 	return result, nil
 }
 
-// MessageExistsWithRawBatch checks which messages have retained raw MIME.
-func (s *Store) MessageExistsWithRawBatch(sourceID int64, sourceMessageIDs []string) (map[string]int64, error) {
+// MessageCompleteBatch returns messages whose raw MIME, materialized
+// attachments, and search row are all present.
+func (s *Store) MessageCompleteBatch(sourceID int64, sourceMessageIDs []string) (map[string]int64, error) {
 	if len(sourceMessageIDs) == 0 {
 		return make(map[string]int64), nil
 	}
 
-	result := make(map[string]int64)
-	err := queryInChunks(s.db, sourceMessageIDs, []any{sourceID},
-		`SELECT m.source_message_id, m.id
+	query := `SELECT m.source_message_id, m.id
 		 FROM messages m
 		 JOIN message_raw mr ON mr.message_id = m.id
-		 WHERE m.source_id = ? AND m.source_message_id IN (%s)`,
+		 WHERE m.source_id = ?
+		   AND m.source_message_id IN (%s)
+		   AND m.attachment_count = (
+		       SELECT COUNT(*) FROM attachments a WHERE a.message_id = m.id
+		   )`
+	if s.fts5Available {
+		query += ` AND EXISTS (SELECT 1 FROM messages_fts f WHERE f.rowid = m.id)`
+	}
+
+	result := make(map[string]int64)
+	err := queryInChunks(s.db, sourceMessageIDs, []any{sourceID},
+		query,
 		func(rows *loggedRows) error {
 			var srcID string
 			var id int64
@@ -754,8 +764,7 @@ func (s *Store) RemoveMessageLabels(messageID int64, labelIDs []int64) error {
 		`DELETE FROM message_labels WHERE message_id = ? AND label_id IN (%s)`)
 }
 
-// SetReplyTo links a channel reply to its parent by resolving the parent's
-// source_message_id to its internal messages.id within the same source.
+// MarkMessageDeleted tombstones a message removed from Gmail.
 func (s *Store) MarkMessageDeleted(sourceID int64, sourceMessageID string) error {
 	_, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE messages
@@ -1107,43 +1116,20 @@ func (s *Store) IsAttachmentPathReferenced(storagePath string) (bool, error) {
 	return count > 0, nil
 }
 
-// UpsertAttachment stores an attachment record. Idempotency for the
-// common case is enforced by the partial unique index
-// idx_attachments_msg_content_hash on (message_id, content_hash) where
-// content_hash is non-empty; concurrent inserts collapse to one row via
-// ON CONFLICT DO NOTHING. `size` is widened to int64 at the bind
-// boundary so 32-bit builds cannot truncate large attachments before
-// the column (BIGINT on PG, INTEGER on SQLite).
-//
-// When contentHash is empty (the rare untyped-blob path used by some
-// importers), the unique index does not cover the row; a best-effort
-// (message_id, empty-hash) match is used to avoid trivial duplicates,
-// but two concurrent empty-hash inserts on the same message may both
-// succeed.
-func (s *Store) UpsertAttachment(messageID int64, filename, mimeType, storagePath, contentHash string, size int) error {
-	if contentHash != "" {
-		_, err := s.db.Exec(fmt.Sprintf(`
-			INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, %s)
-			ON CONFLICT (message_id, content_hash) WHERE content_hash IS NOT NULL AND content_hash != '' DO NOTHING
-		`, s.dialect.Now()), messageID, filename, mimeType, storagePath, contentHash, int64(size))
-		return err
-	}
-
-	var existingID int64
-	err := s.db.QueryRow(`
-		SELECT id FROM attachments WHERE message_id = ? AND (content_hash IS NULL OR content_hash = '')
-	`, messageID).Scan(&existingID)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	_, err = s.db.Exec(fmt.Sprintf(`
-		INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, %s)
-	`, s.dialect.Now()), messageID, filename, mimeType, storagePath, contentHash, int64(size))
+// UpsertAttachment stores one logical MIME part. The stable part index makes
+// retries idempotent without collapsing distinct parts that share bytes.
+func (s *Store) UpsertAttachment(messageID int64, partIndex int, filename, mimeType, storagePath, contentHash string, size int) error {
+	_, err := s.db.Exec(fmt.Sprintf(`
+		INSERT INTO attachments (
+			message_id, part_index, filename, mime_type, storage_path, content_hash, size, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, %s)
+		ON CONFLICT (message_id, part_index) DO UPDATE SET
+			filename = excluded.filename,
+			mime_type = excluded.mime_type,
+			storage_path = excluded.storage_path,
+			content_hash = excluded.content_hash,
+			size = excluded.size
+	`, s.dialect.Now()), messageID, partIndex, filename, mimeType, storagePath, contentHash, int64(size))
 	return err
 }
 

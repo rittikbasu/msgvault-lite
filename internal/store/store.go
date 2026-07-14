@@ -98,11 +98,14 @@ func OpenForTest(dbPath string) (*Store, error) {
 // openSQLite opens a SQLite database at the given file path with the
 // supplied DSN parameters appended.
 func openSQLite(dbPath, params string) (*Store, error) {
-	// Ensure directory exists (skip for in-memory databases)
-	if dbPath != ":memory:" && !strings.Contains(dbPath, ":memory:") {
+	inMemory := dbPath == ":memory:" || strings.Contains(dbPath, ":memory:")
+	if !inMemory {
 		dir := filepath.Dir(dbPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create db directory: %w", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // directory must be owner-only and traversable
+			return nil, fmt.Errorf("secure db directory: %w", err)
 		}
 	}
 
@@ -116,13 +119,17 @@ func openSQLite(dbPath, params string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
+	if !inMemory {
+		if err := os.Chmod(dbPath, 0o600); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("secure database file: %w", err)
+		}
+	}
 
 	// SQLite with WAL supports one writer + multiple readers.
-	// Allow enough connections for concurrent reads (TUI async
-	// queries, FTS backfill) while SQLite handles write serialization.
-	// Exception: :memory: databases are per-connection, so multiple
-	// connections would create separate databases.
-	if dbPath == ":memory:" || strings.Contains(dbPath, ":memory:") {
+	// Allow enough connections for concurrent reads while SQLite handles write
+	// serialization. In-memory databases must stay on one connection.
+	if inMemory {
 		db.SetMaxOpenConns(1)
 	} else {
 		db.SetMaxOpenConns(4)

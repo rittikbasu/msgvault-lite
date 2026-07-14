@@ -35,7 +35,7 @@ func ReadPrivateFile(path string) ([]byte, error) {
 
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open private file: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), path)
 	defer func() { _ = f.Close() }()
@@ -60,7 +60,7 @@ func ReadPrivateFile(path string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("inspect private file ownership: %s", path)
 	}
-	if stat.Uid != uint32(os.Geteuid()) {
+	if int64(stat.Uid) != int64(os.Geteuid()) {
 		return nil, fmt.Errorf("private file is not owned by the current user: %s", path)
 	}
 

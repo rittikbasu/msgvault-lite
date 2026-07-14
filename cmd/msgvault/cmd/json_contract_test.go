@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +21,28 @@ import (
 func decodeJSONObject(t *testing.T, data []byte) map[string]any {
 	t.Helper()
 	var got map[string]any
-	require.NoError(t, json.Unmarshal(data, &got))
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&got))
 	return got
+}
+
+func requireJSONObject(t *testing.T, value any) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	require.True(t, ok, "value is not a JSON object: %T", value)
+	return object
+}
+
+func requireJSONArray(t *testing.T, value any) []any {
+	t.Helper()
+	array, ok := value.([]any)
+	require.True(t, ok, "value is not a JSON array: %T", value)
+	return array
+}
+
+func jsonInt(value int64) json.Number {
+	return json.Number(strconv.FormatInt(value, 10))
 }
 
 func TestStatusJSONContract(t *testing.T) {
@@ -37,11 +58,11 @@ func TestStatusJSONContract(t *testing.T) {
 	require.NoError(t, runStats(cmd, nil))
 
 	got := decodeJSONObject(t, out.Bytes())
-	assert.Equal(t, float64(jsonSchemaVersion), got["schema_version"])
-	messages := got["messages"].(map[string]any)
-	assert.Equal(t, float64(1), messages["total"])
-	assert.Equal(t, float64(1), messages["active"])
-	assert.Equal(t, float64(0), messages["deleted_from_source"])
+	assert.Equal(t, jsonInt(jsonSchemaVersion), got["schema_version"])
+	messages := requireJSONObject(t, got["messages"])
+	assert.Equal(t, jsonInt(1), messages["total"])
+	assert.Equal(t, jsonInt(1), messages["active"])
+	assert.Equal(t, jsonInt(0), messages["deleted_from_source"])
 }
 
 func TestMessagesJSONContract(t *testing.T) {
@@ -59,15 +80,15 @@ func TestMessagesJSONContract(t *testing.T) {
 	require.NoError(t, runMessages(cmd))
 
 	got := decodeJSONObject(t, out.Bytes())
-	assert.Equal(t, float64(jsonSchemaVersion), got["schema_version"])
-	items := got["items"].([]any)
+	assert.Equal(t, jsonInt(jsonSchemaVersion), got["schema_version"])
+	items := requireJSONArray(t, got["items"])
 	require.Len(t, items, 1)
-	assert.Equal(t, float64(messageID), items[0].(map[string]any)["id"])
-	page := got["page"].(map[string]any)
-	assert.Equal(t, float64(10), page["limit"])
-	assert.Equal(t, float64(0), page["offset"])
-	assert.Equal(t, float64(1), page["returned"])
-	assert.Equal(t, float64(1), page["total"])
+	assert.Equal(t, jsonInt(messageID), requireJSONObject(t, items[0])["id"])
+	page := requireJSONObject(t, got["page"])
+	assert.Equal(t, jsonInt(10), page["limit"])
+	assert.Equal(t, jsonInt(0), page["offset"])
+	assert.Equal(t, jsonInt(1), page["returned"])
+	assert.Equal(t, jsonInt(1), page["total"])
 	assert.Equal(t, false, page["has_more"])
 }
 
@@ -86,13 +107,13 @@ func TestSearchJSONContract(t *testing.T) {
 	require.NoError(t, runSearch(cmd, "subject:Needle"))
 
 	got := decodeJSONObject(t, out.Bytes())
-	assert.Equal(t, float64(jsonSchemaVersion), got["schema_version"])
-	items := got["items"].([]any)
+	assert.Equal(t, jsonInt(jsonSchemaVersion), got["schema_version"])
+	items := requireJSONArray(t, got["items"])
 	require.Len(t, items, 1)
-	assert.Equal(t, float64(messageID), items[0].(map[string]any)["id"])
-	page := got["page"].(map[string]any)
-	assert.Equal(t, float64(1), page["limit"])
-	assert.Equal(t, float64(1), page["returned"])
+	assert.Equal(t, jsonInt(messageID), requireJSONObject(t, items[0])["id"])
+	page := requireJSONObject(t, got["page"])
+	assert.Equal(t, jsonInt(1), page["limit"])
+	assert.Equal(t, jsonInt(1), page["returned"])
 	assert.Equal(t, false, page["has_more"])
 	assert.NotContains(t, page, "total")
 }
@@ -128,9 +149,9 @@ func TestSearchJSONContractReportsHasMore(t *testing.T) {
 	require.NoError(t, runSearch(cmd, "subject:Needle"))
 
 	got := decodeJSONObject(t, out.Bytes())
-	assert.Len(t, got["items"].([]any), 1)
-	page := got["page"].(map[string]any)
-	assert.Equal(t, float64(1), page["returned"])
+	assert.Len(t, requireJSONArray(t, got["items"]), 1)
+	page := requireJSONObject(t, got["page"])
+	assert.Equal(t, jsonInt(1), page["returned"])
 	assert.Equal(t, true, page["has_more"])
 }
 
@@ -145,9 +166,9 @@ func TestShowJSONContractBoundsBodies(t *testing.T) {
 	require.NoError(t, outputMessageJSON(&out, msg, 9))
 
 	got := decodeJSONObject(t, out.Bytes())
-	assert.Equal(t, float64(jsonSchemaVersion), got["schema_version"])
-	message := got["message"].(map[string]any)
-	assert.Equal(t, float64(42), message["id"])
+	assert.Equal(t, jsonInt(jsonSchemaVersion), got["schema_version"])
+	message := requireJSONObject(t, got["message"])
+	assert.Equal(t, jsonInt(42), message["id"])
 	assert.Equal(t, "éééé", message["body_text"])
 	assert.Equal(t, true, message["body_text_truncated"])
 	assert.Equal(t, "xxxxxxxxx", message["body_html"])

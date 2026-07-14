@@ -230,14 +230,13 @@ func TestScanSource_UnrecognizedFormat(t *testing.T) {
 	require.Error(t, err, "expected error for unrecognized timestamp format")
 
 	// Error should include the bad value for debugging
-	assert.ErrorContains(t, err, badTimestamp, "error should include the bad value")
+	require.ErrorContains(t, err, badTimestamp, "error should include the bad value")
 }
 
 // TestScanSource_NullRequiredTimestamp verifies that parseRequiredTime returns
 // an error when a required timestamp field (created_at/updated_at) is NULL.
 func TestScanSource_NullRequiredTimestamp(t *testing.T) {
 	require := require.New(t)
-	assert := assert.New(t)
 	st := testutil.NewTestStore(t)
 
 	// Create a source
@@ -254,7 +253,7 @@ func TestScanSource_NullRequiredTimestamp(t *testing.T) {
 
 	// Error should mention the field name and that it's NULL
 	require.ErrorContains(err, "created_at", "error should mention field")
-	assert.ErrorContains(err, "NULL", "error should mention NULL status")
+	require.ErrorContains(err, "NULL", "error should mention NULL status")
 }
 
 func TestCommitSyncRejectsSupersededRun(t *testing.T) {
@@ -264,7 +263,7 @@ func TestCommitSyncRejectsSupersededRun(t *testing.T) {
 
 	err := f.Store.CommitSync(f.Source.ID, oldRunID, "2000")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "current running sync")
+	require.ErrorContains(t, err, "current running sync")
 
 	source, err := f.Store.GetSourceByID(f.Source.ID)
 	require.NoError(t, err)
@@ -283,7 +282,7 @@ func TestCommitSyncRejectsRunFromAnotherSource(t *testing.T) {
 
 	err = f.Store.CommitSync(other.ID, runID, "2000")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "current running sync")
+	require.ErrorContains(t, err, "current running sync")
 
 	other, err = f.Store.GetSourceByID(other.ID)
 	require.NoError(t, err)

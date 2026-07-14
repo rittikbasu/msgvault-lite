@@ -53,6 +53,7 @@ func (panicOnCompleteProgress) OnComplete(*gmail.SyncSummary) {
 
 type supersedeOnProfileAPI struct {
 	*gmail.MockAPI
+
 	store    *store.Store
 	sourceID int64
 }
@@ -115,7 +116,7 @@ func TestIncrementalSyncBatchFetchErrorKeepsHistoryCursor(t *testing.T) {
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err, "incremental sync should fail when a message cannot be fetched")
 	assert.Nil(summary, "failed incremental sync should not return a successful summary")
-	assert.ErrorContains(err, "1 message")
+	require.ErrorContains(err, "1 message")
 
 	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
@@ -187,7 +188,7 @@ func TestIncrementalSyncCursorCommitFailureDoesNotReportSuccess(t *testing.T) {
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err, "incremental sync should fail when its cursor cannot be committed")
 	assert.Nil(summary, "failed incremental sync should not return a successful summary")
-	assert.ErrorContains(err, "commit incremental sync")
+	require.ErrorContains(err, "commit incremental sync")
 
 	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
@@ -220,7 +221,7 @@ func TestIncrementalSyncCompletionFailureRollsBackCursor(t *testing.T) {
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err)
 	assert.Nil(summary)
-	assert.ErrorContains(err, "commit incremental sync")
+	require.ErrorContains(err, "commit incremental sync")
 
 	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err)
@@ -251,7 +252,7 @@ func TestFullSyncCompletionFailureRollsBackCursor(t *testing.T) {
 	summary, err := env.Syncer.Full(env.Context, testEmail)
 	require.Error(err, "full sync should fail when its run cannot be completed")
 	require.NotNil(summary, "failed sync should return its diagnostic summary")
-	assert.ErrorContains(err, "commit full sync")
+	require.ErrorContains(err, "commit full sync")
 
 	source, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
@@ -280,7 +281,7 @@ func TestFullSyncCheckpointFailureDoesNotAdvanceCursor(t *testing.T) {
 	summary, err := env.Syncer.Full(env.Context, testEmail)
 	require.Error(err, "full sync should fail when its checkpoint cannot be saved")
 	assert.Nil(summary, "failed full sync should not return a successful summary")
-	assert.ErrorContains(err, "save sync checkpoint")
+	require.ErrorContains(err, "save sync checkpoint")
 
 	source, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
@@ -301,7 +302,7 @@ func TestFullSyncOnCompletePanicKeepsCommittedState(t *testing.T) {
 	summary, err := env.Syncer.Full(env.Context, testEmail)
 	require.Error(err, "progress panic should be returned as an error")
 	assert.Nil(summary, "panic recovery should not return a success summary")
-	assert.ErrorContains(err, "progress completion panic")
+	require.ErrorContains(err, "progress completion panic")
 
 	source, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
@@ -326,7 +327,7 @@ func TestIncrementalSyncOnCompletePanicKeepsCommittedState(t *testing.T) {
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err, "progress panic should be returned as an error")
 	assert.Nil(summary, "panic recovery should not return a success summary")
-	assert.ErrorContains(err, "progress completion panic")
+	require.ErrorContains(err, "progress completion panic")
 
 	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
 	require.NoError(err, "GetSourceByIdentifier")
@@ -359,7 +360,7 @@ func TestIncrementalSyncAlreadyCurrentCompletionFailureDoesNotReportSuccess(t *t
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err, "incremental sync should fail when its run cannot be completed")
 	assert.Nil(summary, "failed incremental sync should not return a successful summary")
-	assert.ErrorContains(err, "complete up-to-date sync")
+	require.ErrorContains(err, "complete up-to-date sync")
 
 	run, err := env.Store.GetLatestSync(source.ID)
 	require.NoError(err, "GetLatestSync")
@@ -381,7 +382,7 @@ func TestIncrementalSyncAlreadyCurrentCannotCompleteSupersededRun(t *testing.T) 
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err, "superseded incremental sync must not report completion")
 	assert.Nil(summary, "superseded sync should not return a success summary")
-	assert.ErrorContains(err, "complete up-to-date sync")
+	require.ErrorContains(err, "complete up-to-date sync")
 
 	var completed, failed, running int
 	err = env.Store.DB().QueryRow(`
@@ -417,7 +418,7 @@ func TestIncrementalSyncCheckpointFailureKeepsHistoryCursor(t *testing.T) {
 	summary, err := env.Syncer.Incremental(env.Context, source)
 	require.Error(err, "incremental sync should fail when its checkpoint cannot be saved")
 	assert.Nil(summary, "failed incremental sync should not return a successful summary")
-	assert.ErrorContains(err, "save sync checkpoint")
+	require.ErrorContains(err, "save sync checkpoint")
 	assertMessageCount(t, env.Store, 1)
 
 	updatedSource, err := env.Store.GetSourceByIdentifier(testEmail)
@@ -550,7 +551,7 @@ func TestFullSyncWithErrors(t *testing.T) {
 
 	summary, syncErr := env.Syncer.Full(env.Context, testEmail)
 	require.Error(syncErr, "full sync should fail when a message cannot be fetched")
-	assert.ErrorContains(syncErr, "1 message")
+	require.ErrorContains(syncErr, "1 message")
 	require.NotNil(summary, "failed sync should return its diagnostic summary")
 	assertSummary(t, summary, WantSummary{Added: new(int64(2)), Errors: new(int64(1))})
 
@@ -650,7 +651,7 @@ func TestStoreAttachment_ComputesHashWhenMissing(t *testing.T) {
 		ContentHash: "",
 		Content:     content,
 	}
-	require.NoError(env.Syncer.storeAttachment(messageID, &att), "storeAttachment")
+	require.NoError(env.Syncer.storeAttachment(messageID, 0, &att), "storeAttachment")
 	require.Equal(wantHash, att.ContentHash, "ContentHash")
 
 	var gotHash, storagePath string
@@ -690,7 +691,7 @@ func TestStoreAttachment_InvalidContentHash_ReturnsError(t *testing.T) {
 		ContentHash: "nope", // malformed
 		Content:     content,
 	}
-	require.Error(env.Syncer.storeAttachment(messageID, &att), "expected error")
+	require.Error(env.Syncer.storeAttachment(messageID, 0, &att), "expected error")
 
 	_, statErr := os.Stat(attachmentsDir)
 	require.Error(statErr, "attachments dir should not have been created for invalid content hash")
@@ -752,7 +753,7 @@ func TestFullSyncAllErrors(t *testing.T) {
 
 	summary, err := env.Syncer.Full(env.Context, testEmail)
 	require.Error(t, err, "full sync should fail when every message fetch fails")
-	assert.ErrorContains(t, err, "3 message")
+	require.ErrorContains(t, err, "3 message")
 	require.NotNil(t, summary, "failed sync should return its diagnostic summary")
 	assertSummary(t, summary, WantSummary{Added: new(int64(0)), Errors: new(int64(3))})
 
@@ -797,7 +798,7 @@ func TestFullSyncLimitDoesNotEstablishCursor(t *testing.T) {
 
 	summary, err := env.Syncer.Full(env.Context, testEmail)
 	require.Error(err, "limited full sync should report incomplete status")
-	assert.ErrorContains(err, "stopped at --limit 2")
+	require.ErrorContains(err, "stopped at --limit 2")
 	require.NotNil(summary, "limited sync should return its diagnostic summary")
 	assert.Equal(int64(2), summary.MessagesFound, "MessagesFound")
 
@@ -1017,6 +1018,31 @@ func TestFullSyncWithAttachment(t *testing.T) {
 	assertAttachmentCount(t, env.Store, 1)
 }
 
+func TestFullSyncRetriesIncompleteAttachmentPersistence(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	env := newTestEnv(t)
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("retry-attachment", testMIMEWithAttachment(), []string{"INBOX"})
+
+	blockedPath := filepath.Join(env.TmpDir, "not-a-directory")
+	require.NoError(os.WriteFile(blockedPath, []byte("block"), 0o600))
+	env.SetOptions(t, func(o *Options) { o.AttachmentsDir = blockedPath })
+
+	_, err := env.Syncer.Full(env.Context, testEmail)
+	require.Error(err, "attachment persistence failure must fail full sync")
+	source, sourceErr := env.Store.GetSourceByIdentifier(testEmail)
+	require.NoError(sourceErr)
+	assert.False(source.SyncCursor.Valid, "failed full sync must not establish a cursor")
+
+	require.NoError(os.Remove(blockedPath))
+	require.NoError(os.Mkdir(blockedPath, 0o700))
+	summary := runFullSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: new(int64(1))})
+	assertAttachmentCount(t, env.Store, 1)
+}
+
 func TestFullSyncWithEmptyAttachment(t *testing.T) {
 	env := newTestEnv(t)
 
@@ -1049,6 +1075,28 @@ func TestFullSyncAttachmentDeduplication(t *testing.T) {
 	assertAttachmentCount(t, env.Store, 2)
 
 	assert.Equal(t, 1, countFiles(t, attachDir), "files in attachments dir (deduped)")
+}
+
+func TestFullSyncPreservesDuplicateContentAttachmentParts(t *testing.T) {
+	env := newTestEnv(t)
+	content := []byte("same bytes")
+	raw := testemail.NewMessage().
+		Subject("Duplicate attachment parts").
+		Body("Body text.").
+		WithAttachment("first.txt", "text/plain", content).
+		WithAttachment("second.txt", "text/plain", content).
+		Bytes()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("duplicate-parts", raw, []string{"INBOX"})
+	attachDir := withAttachmentsDir(t, env)
+
+	runFullSync(t, env)
+	assertAttachmentCount(t, env.Store, 2)
+	assert.Equal(t, 1, countFiles(t, attachDir), "identical content should share one blob")
+
+	summary := runFullSync(t, env)
+	assertSummary(t, summary, WantSummary{Added: new(int64(0)), Skipped: new(int64(1))})
 }
 
 // TestFullSync_MessageVariations consolidates tests for various MIME message formats.
@@ -1414,7 +1462,7 @@ func TestFullSyncEmptyRawMIME(t *testing.T) {
 
 	summary, syncErr := env.Syncer.Full(env.Context, testEmail)
 	require.Error(syncErr, "full sync should fail when a message cannot be ingested")
-	assert.ErrorContains(syncErr, "1 message")
+	require.ErrorContains(syncErr, "1 message")
 	require.NotNil(summary, "failed sync should return its diagnostic summary")
 	assertSummary(t, summary, WantSummary{Added: new(int64(1)), Errors: new(int64(1))})
 

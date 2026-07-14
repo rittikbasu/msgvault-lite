@@ -143,7 +143,7 @@ func validateSingleGmailArchive(s *store.Store, email string) error {
 			return fmt.Errorf("archive contains unsupported source type %q; msgvault-lite supports exactly one Gmail source", source.SourceType)
 		}
 		if source.Identifier != email {
-			return fmt.Errorf("Gmail account %s is already configured; msgvault-lite supports exactly one account", source.Identifier)
+			return fmt.Errorf("gmail account %s is already configured; msgvault-lite supports exactly one account", source.Identifier)
 		}
 	}
 	return nil

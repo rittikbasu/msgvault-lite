@@ -15,10 +15,6 @@ func directWriteTestConfig(dataDir string) *config.Config {
 	}
 }
 
-func lifecycleTestConfig(dataDir string) *config.Config {
-	return directWriteTestConfig(dataDir)
-}
-
 func withStoreResolverConfig(t *testing.T, c *config.Config) {
 	t.Helper()
 	oldCfg := cfg
@@ -55,14 +51,19 @@ func TestOpenWritableStoreAndInitOwnsArchiveUntilCleanup(t *testing.T) {
 	require.NoError(t, err, "open writable store")
 	require.NotNil(t, st, "store")
 	require.NotNil(t, cleanup, "cleanup")
-	defer cleanup()
+	cleaned := false
+	t.Cleanup(func() {
+		if !cleaned {
+			cleanup()
+		}
+	})
 
 	blocked, err := tryAcquireWriteOwnerLock(dataDir)
 	assert.Nil(t, blocked, "second owner while store is open")
 	require.ErrorAs(t, err, &writeOwnerLockHeldError{}, "store helper holds write-owner lock")
 
 	cleanup()
-	cleanup = func() {}
+	cleaned = true
 
 	reacquired, err := tryAcquireWriteOwnerLock(dataDir)
 	require.NoError(t, err, "cleanup releases write-owner lock")

@@ -120,10 +120,10 @@ func (tdb *TestDB) SeedStandardDataSet() {
 			(5, 1);
 
 		-- Attachments
-		INSERT INTO attachments (id, message_id, filename, mime_type, size, content_hash, storage_path) VALUES
-			(1, 2, 'doc.pdf', 'application/pdf', 10000, 'hash1', 'ab/hash1'),
-			(2, 2, 'image.png', 'image/png', 5000, 'hash2', 'cd/hash2'),
-			(3, 4, 'report.xlsx', 'application/xlsx', 20000, 'hash3', 'ef/hash3');
+		INSERT INTO attachments (id, message_id, part_index, filename, mime_type, size, content_hash, storage_path) VALUES
+			(1, 2, 0, 'doc.pdf', 'application/pdf', 10000, 'hash1', 'ab/hash1'),
+			(2, 2, 1, 'image.png', 'image/png', 5000, 'hash2', 'cd/hash2'),
+			(3, 4, 0, 'report.xlsx', 'application/xlsx', 20000, 'hash3', 'ef/hash3');
 	`
 
 	_, err := tdb.DB.Exec(testData)

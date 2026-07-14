@@ -108,9 +108,8 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// request makes an HTTP request with rate limiting and retry logic.
-// bodyBytes can be nil for requests without a body.
-func (c *Client) request(ctx context.Context, op Operation, method, path string, bodyBytes []byte) ([]byte, error) {
+// request makes a read-only HTTP request with rate limiting and retry logic.
+func (c *Client) request(ctx context.Context, op Operation, method, path string) ([]byte, error) {
 	if err := validateReadOnlyMethod(method); err != nil {
 		return nil, err
 	}
@@ -134,18 +133,9 @@ func (c *Client) request(ctx context.Context, op Operation, method, path string,
 			}
 		}
 
-		// Create a new reader for each attempt to ensure body can be re-read on retry
-		var body io.Reader
-		if bodyBytes != nil {
-			body = bytes.NewReader(bodyBytes)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
-		}
-		if bodyBytes != nil {
-			req.Header.Set("Content-Type", "application/json")
 		}
 
 		resp, err := c.httpClient.Do(req)
@@ -325,7 +315,7 @@ type listHistoryResponse struct {
 // GetProfile returns the authenticated user's profile.
 func (c *Client) GetProfile(ctx context.Context) (*Profile, error) {
 	path := fmt.Sprintf("/users/%s/profile", c.userID)
-	data, err := c.request(ctx, OpProfile, "GET", path, nil)
+	data, err := c.request(ctx, OpProfile, "GET", path)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +338,7 @@ func (c *Client) GetProfile(ctx context.Context) (*Profile, error) {
 // ListLabels returns all labels for the account.
 func (c *Client) ListLabels(ctx context.Context) ([]*Label, error) {
 	path := fmt.Sprintf("/users/%s/labels", c.userID)
-	data, err := c.request(ctx, OpLabelsList, "GET", path, nil)
+	data, err := c.request(ctx, OpLabelsList, "GET", path)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +376,7 @@ func (c *Client) ListMessages(ctx context.Context, query string, pageToken strin
 	}
 
 	path := fmt.Sprintf("/users/%s/messages?%s", c.userID, params.Encode())
-	data, err := c.request(ctx, OpMessagesList, "GET", path, nil)
+	data, err := c.request(ctx, OpMessagesList, "GET", path)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +401,7 @@ func (c *Client) ListMessages(ctx context.Context, query string, pageToken strin
 // GetMessageRaw fetches a single message with raw MIME data.
 func (c *Client) GetMessageRaw(ctx context.Context, messageID string) (*RawMessage, error) {
 	path := fmt.Sprintf("/users/%s/messages/%s?format=raw", c.userID, messageID)
-	data, err := c.request(ctx, OpMessagesGetRaw, "GET", path, nil)
+	data, err := c.request(ctx, OpMessagesGetRaw, "GET", path)
 	if err != nil {
 		return nil, err
 	}
@@ -531,7 +521,7 @@ func (c *Client) ListHistory(ctx context.Context, startHistoryID uint64, pageTok
 	}
 
 	path := fmt.Sprintf("/users/%s/history?%s", c.userID, params.Encode())
-	data, err := c.request(ctx, OpHistoryList, "GET", path, nil)
+	data, err := c.request(ctx, OpHistoryList, "GET", path)
 	if err != nil {
 		return nil, err
 	}

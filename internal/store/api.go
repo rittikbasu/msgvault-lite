@@ -331,7 +331,7 @@ func (s *Store) GetMessageContext(ctx context.Context, id int64) (*APIMessage, e
 	}
 
 	// Get attachments
-	attRows, err := s.db.QueryContext(ctx, "SELECT id, COALESCE(filename, ''), COALESCE(mime_type, ''), COALESCE(size, 0), COALESCE(content_hash, ''), storage_path FROM attachments WHERE message_id = ?", id)
+	attRows, err := s.db.QueryContext(ctx, "SELECT id, COALESCE(filename, ''), COALESCE(mime_type, ''), COALESCE(size, 0), COALESCE(content_hash, ''), storage_path FROM attachments WHERE message_id = ? ORDER BY part_index", id)
 	if err != nil {
 		return nil, fmt.Errorf("get attachments: %w", err)
 	}

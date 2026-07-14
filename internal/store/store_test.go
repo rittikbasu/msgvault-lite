@@ -3,6 +3,9 @@ package store_test
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -23,6 +26,27 @@ func TestStore_Open(t *testing.T) {
 	assert.NotNil(t, st.DB(), "DB() returned nil")
 }
 
+func TestStoreOpenSecuresExistingDirectoryAndDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not enforced on Windows")
+	}
+	require := require.New(t)
+	home := filepath.Join(t.TempDir(), "archive")
+	require.NoError(os.Mkdir(home, 0o755))
+	dbPath := filepath.Join(home, "msgvault.db")
+
+	st, err := store.Open(dbPath)
+	require.NoError(err)
+	require.NoError(st.Close())
+
+	homeInfo, err := os.Stat(home)
+	require.NoError(err)
+	assert.Equal(t, os.FileMode(0o700), homeInfo.Mode().Perm())
+	dbInfo, err := os.Stat(dbPath)
+	require.NoError(err)
+	assert.Equal(t, os.FileMode(0o600), dbInfo.Mode().Perm())
+}
+
 func TestStoreRejectsDatabaseURLs(t *testing.T) {
 	for _, dbURL := range []string{
 		"postgres://user:***@example.com/msgvault",
@@ -32,7 +56,7 @@ func TestStoreRejectsDatabaseURLs(t *testing.T) {
 		t.Run(dbURL, func(t *testing.T) {
 			st, err := store.Open(dbURL)
 			assert.Nil(t, st)
-			assert.ErrorContains(t, err, "database URLs are not supported")
+			require.ErrorContains(t, err, "database URLs are not supported")
 			assert.NotContains(t, err.Error(), "sensitive-password")
 		})
 	}
@@ -218,6 +242,43 @@ func TestStore_MessageExistsBatch(t *testing.T) {
 	assert.Contains(existing, "msg-1")
 	assert.Contains(existing, "msg-2")
 	assert.NotContains(existing, "msg-4")
+}
+
+func TestStore_MessageCompleteBatch(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	f := storetest.New(t)
+	if !f.Store.FTS5Available() {
+		t.Skip("FTS5 not available")
+	}
+
+	messageID := f.NewMessage().
+		WithSourceMessageID("complete-1").
+		WithAttachmentCount(1).
+		Create(t, f.Store)
+
+	complete, err := f.Store.MessageCompleteBatch(f.Source.ID, []string{"complete-1"})
+	require.NoError(err)
+	assert.Empty(complete)
+
+	require.NoError(f.Store.UpsertMessageRaw(messageID, sampleRawMessage))
+	require.NoError(f.Store.UpsertAttachment(
+		messageID, 0, "report.pdf", "application/pdf", "aa/report.pdf", "hash-1", 12,
+	))
+	complete, err = f.Store.MessageCompleteBatch(f.Source.ID, []string{"complete-1"})
+	require.NoError(err)
+	assert.Empty(complete, "missing FTS row must be incomplete")
+
+	require.NoError(f.Store.UpsertFTS(messageID, "report", "body", "from@example.com", "", ""))
+	complete, err = f.Store.MessageCompleteBatch(f.Source.ID, []string{"complete-1"})
+	require.NoError(err)
+	assert.Contains(complete, "complete-1")
+
+	_, err = f.Store.DB().Exec("DELETE FROM attachments WHERE message_id = ?", messageID)
+	require.NoError(err)
+	complete, err = f.Store.MessageCompleteBatch(f.Source.ID, []string{"complete-1"})
+	require.NoError(err)
+	assert.Empty(complete, "missing attachment row must be incomplete")
 }
 
 func TestStore_MessageRaw(t *testing.T) {
@@ -544,11 +605,11 @@ func TestStore_Attachment(t *testing.T) {
 		WithAttachmentCount(1).
 		Create(t, f.Store)
 
-	err := f.Store.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
+	err := f.Store.UpsertAttachment(msgID, 0, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
 	require.NoError(err, "UpsertAttachment()")
 
-	// Upsert same attachment (should not error, dedupe by content_hash)
-	err = f.Store.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
+	// Upsert the same MIME part (should update in place).
+	err = f.Store.UpsertAttachment(msgID, 0, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
 	require.NoError(err, "UpsertAttachment() duplicate")
 
 	stats, err := f.Store.GetStats()

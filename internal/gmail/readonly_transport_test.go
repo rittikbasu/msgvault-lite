@@ -49,9 +49,12 @@ func TestReadOnlyTransportRejectsMutationMethodsWithoutSending(t *testing.T) {
 			req, err := http.NewRequestWithContext(context.Background(), method, "https://gmail.googleapis.com/gmail/v1/users/me/messages/1", nil)
 			require.NoError(t, err)
 
-			_, err = transport.RoundTrip(req)
+			resp, err := transport.RoundTrip(req)
+			if resp != nil {
+				require.NoError(t, resp.Body.Close())
+			}
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "read-only transport")
+			require.ErrorContains(t, err, "read-only transport")
 			assert.Zero(t, base.calls)
 		})
 	}
@@ -59,7 +62,7 @@ func TestReadOnlyTransportRejectsMutationMethodsWithoutSending(t *testing.T) {
 
 func TestClientRequestRejectsMutationBeforeRateLimitOrNetwork(t *testing.T) {
 	client := &Client{rateLimiter: NewRateLimiter(1), logger: slog.Default()}
-	_, err := client.request(context.Background(), OpMessagesGet, http.MethodPost, "/users/me/messages/1/trash", nil)
+	_, err := client.request(context.Background(), OpMessagesGet, http.MethodPost, "/users/me/messages/1/trash")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "read-only transport")
 }

@@ -22,18 +22,11 @@ const (
 	cliProgressDurationCompactMinutes
 )
 
-var (
-	cliPercentProgressStyle = cliProgressBarStyle{
-		Width:  cliProgressBarWidth,
-		Filled: "=",
-		Empty:  " ",
-	}
-	cliDeletionProgressStyle = cliProgressBarStyle{
-		Width:  cliProgressBarWidth,
-		Filled: "#",
-		Empty:  "-",
-	}
-)
+var cliPercentProgressStyle = cliProgressBarStyle{
+	Width:  cliProgressBarWidth,
+	Filled: "=",
+	Empty:  " ",
+}
 
 func formatCLIProgressDuration(d time.Duration, style cliProgressDurationStyle) string {
 	d = d.Round(time.Second)
@@ -104,10 +97,4 @@ func writeCLIProgressPercent(w io.Writer, done, total int64) {
 		formatCLIProgressBar(float64(pct), cliPercentProgressStyle),
 		pct,
 	)
-}
-
-func writeCLIIndexedProgressComplete(w io.Writer, indexed int64) {
-	_, _ = fmt.Fprintf(w,
-		"\r  %s 100%%  %d messages indexed.\n",
-		formatCLIProgressBar(100, cliPercentProgressStyle), indexed)
 }

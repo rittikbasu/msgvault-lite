@@ -25,7 +25,7 @@ func TestReadPrivateFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		assert.ErrorContains(t, err, "not a regular file")
+		require.ErrorContains(t, err, "not a regular file")
 	case <-time.After(250 * time.Millisecond):
 		assert.Fail(t, "ReadPrivateFile blocked while opening a FIFO")
 	}

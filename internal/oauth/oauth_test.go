@@ -285,7 +285,7 @@ func TestSaveTokenRejectsNonReadonlyScopes(t *testing.T) {
 			mgr := setupTestManager(t, Scopes)
 			err := mgr.saveToken("test@gmail.com", &oauth2.Token{AccessToken: "unsafe"}, tt.scopes)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "exact OAuth scopes")
+			require.ErrorContains(t, err, "exact OAuth scopes")
 			assert.False(t, mgr.HasToken("test@gmail.com"))
 		})
 	}
@@ -763,7 +763,7 @@ func TestAuthorizeRejectsUnexpectedDefaultScopesWithoutSavingToken(t *testing.T)
 
 	err := mgr.Authorize(context.Background(), "user@gmail.com")
 	require.Error(t, err, "Authorize must reject an overprivileged grant")
-	assert.ErrorContains(t, err, "exact OAuth scopes")
+	require.ErrorContains(t, err, "exact OAuth scopes")
 	assert.False(t, mgr.HasToken("user@gmail.com"), "rejected token must not be persisted")
 }
 
@@ -791,7 +791,7 @@ func TestAuthorizeRejectionPreservesExistingToken(t *testing.T) {
 
 	err := mgr.Authorize(context.Background(), "user@gmail.com")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "exact OAuth scopes")
+	require.ErrorContains(t, err, "exact OAuth scopes")
 
 	tf, err := mgr.loadTokenFile("user@gmail.com")
 	require.NoError(t, err)

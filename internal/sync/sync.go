@@ -168,8 +168,9 @@ func (s *Syncer) processBatch(ctx context.Context, syncID, sourceID int64, listR
 		threadIDs[m.ID] = m.ThreadID
 	}
 
-	// Check which messages already exist
-	existingMap, err := s.store.MessageExistsWithRawBatch(sourceID, messageIDs)
+	// Skip only fully persisted messages. Rows left incomplete by a prior
+	// attachment or FTS failure are fetched again and repaired idempotently.
+	existingMap, err := s.store.MessageCompleteBatch(sourceID, messageIDs)
 	if err != nil {
 		return nil, fmt.Errorf("check existing: %w", err)
 	}
@@ -541,6 +542,13 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 		return nil, fmt.Errorf("ensure conversation: %w", err)
 	}
 
+	attachments := make([]mime.Attachment, 0, len(parsed.Attachments))
+	for _, attachment := range parsed.Attachments {
+		if len(attachment.Content) > 0 {
+			attachments = append(attachments, attachment)
+		}
+	}
+
 	msg := &store.Message{
 		ConversationID:  conversationID,
 		SourceID:        sourceID,
@@ -549,8 +557,8 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 		Subject:         sql.NullString{String: subject, Valid: subject != ""},
 		Snippet:         sql.NullString{String: snippet, Valid: snippet != ""},
 		SizeEstimate:    raw.SizeEstimate,
-		HasAttachments:  len(parsed.Attachments) > 0,
-		AttachmentCount: len(parsed.Attachments),
+		HasAttachments:  len(attachments) > 0,
+		AttachmentCount: len(attachments),
 	}
 
 	// Set dates - always store in UTC for consistent querying
@@ -575,7 +583,7 @@ func (s *Syncer) parseToModel(sourceID int64, raw *gmail.RawMessage, threadID st
 		cc:             parsed.Cc,
 		bcc:            parsed.Bcc,
 		gmailLabelIDs:  raw.LabelIDs,
-		attachments:    parsed.Attachments,
+		attachments:    attachments,
 		participantMap: participantMap,
 	}, nil
 }
@@ -620,34 +628,18 @@ func (s *Syncer) persistMessage(data *messageData, labelMap map[string]int64) (i
 		return 0, err
 	}
 
-	// Store attachments (best-effort, file I/O outside transaction)
+	// Store attachments outside the message transaction. Any failure aborts the
+	// sync; MessageCompleteBatch keeps the partial row eligible for retry.
 	if s.opts.AttachmentsDir != "" && len(data.attachments) > 0 {
-		for _, att := range data.attachments {
-			if err := s.storeAttachment(messageID, &att); err != nil {
-				s.logger.Warn("failed to store attachment", "message", messageID, "filename", att.Filename, "error", err)
-			}
-		}
-
-		// Correct metadata if any attachments failed to store
-		var storedCount int
-		if err := s.store.DB().QueryRow(
-			s.store.Rebind(`SELECT COUNT(*) FROM attachments WHERE message_id = ?`),
-			messageID,
-		).Scan(&storedCount); err != nil {
-			s.logger.Warn("failed to count stored attachments",
-				"message", messageID, "error", err)
-		} else if storedCount != len(data.attachments) {
-			if _, err := s.store.DB().Exec(
-				s.store.Rebind(`UPDATE messages SET has_attachments = ?, attachment_count = ? WHERE id = ?`),
-				storedCount > 0, storedCount, messageID,
-			); err != nil {
-				s.logger.Warn("failed to update attachment metadata",
-					"message", messageID, "error", err)
+		for partIndex, att := range data.attachments {
+			if err := s.storeAttachment(messageID, partIndex, &att); err != nil {
+				return 0, fmt.Errorf("store attachment %q: %w", att.Filename, err)
 			}
 		}
 	}
 
-	// Populate FTS index (best-effort outside transaction)
+	// Populate FTS outside the message transaction. Failure is retryable by the
+	// same completeness check used for attachments.
 	if s.store.FTS5Available() {
 		subject := ""
 		if data.message.Subject.Valid {
@@ -657,7 +649,7 @@ func (s *Syncer) persistMessage(data *messageData, labelMap map[string]int64) (i
 		toAddrs := joinEmails(data.to)
 		ccAddrs := joinEmails(data.cc)
 		if err := s.store.UpsertFTS(messageID, subject, data.bodyText, fromAddr, toAddrs, ccAddrs); err != nil {
-			s.logger.Warn("failed to upsert FTS", "message", messageID, "error", err)
+			return 0, fmt.Errorf("upsert FTS: %w", err)
 		}
 	}
 
@@ -717,14 +709,14 @@ func buildRecipientSet(recipientType string, addresses []mime.Address, participa
 }
 
 // storeAttachment stores an attachment to disk and records it in the database.
-func (s *Syncer) storeAttachment(messageID int64, att *mime.Attachment) error {
+func (s *Syncer) storeAttachment(messageID int64, partIndex int, att *mime.Attachment) error {
 	storagePath, err := export.StoreAttachmentFile(s.opts.AttachmentsDir, att)
 	if err != nil || storagePath == "" {
 		return err
 	}
 
 	// Record in database
-	return s.store.UpsertAttachment(messageID, att.Filename, att.ContentType, storagePath, att.ContentHash, len(att.Content))
+	return s.store.UpsertAttachment(messageID, partIndex, att.Filename, att.ContentType, storagePath, att.ContentHash, len(att.Content))
 }
 
 // joinEmails concatenates email addresses from a slice of mime.Address with spaces.

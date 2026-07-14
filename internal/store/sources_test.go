@@ -56,39 +56,39 @@ func TestStore_AttachmentPathsUniqueToSource(t *testing.T) {
 
 	// Attachment unique to the default source.
 	uniqueMsg := f.CreateMessage("msg-unique")
-	err = f.Store.UpsertAttachment(uniqueMsg, "u.pdf", "application/pdf",
+	err = f.Store.UpsertAttachment(uniqueMsg, 0, "u.pdf", "application/pdf",
 		"aa/uniquehash", "uniquehash", 10)
 	require.NoError(err, "upsert unique attachment")
 
 	// Attachment shared with another source (same content_hash).
 	sharedMsg := f.CreateMessage("msg-shared")
-	err = f.Store.UpsertAttachment(sharedMsg, "s.pdf", "application/pdf",
+	err = f.Store.UpsertAttachment(sharedMsg, 0, "s.pdf", "application/pdf",
 		"bb/sharedhash", "sharedhash", 20)
 	require.NoError(err, "upsert shared attachment in default source")
-	err = f.Store.UpsertAttachment(otherMsgID, "s.pdf", "application/pdf",
+	err = f.Store.UpsertAttachment(otherMsgID, 0, "s.pdf", "application/pdf",
 		"bb/sharedhash", "sharedhash", 20)
 	require.NoError(err, "upsert shared attachment in other source")
 
 	// Attachment with NULL content_hash (must be excluded).
 	nullHashMsg := f.CreateMessage("msg-null-hash")
 	_, err = f.Store.DB().Exec(
-		f.Store.Rebind(`INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-		 VALUES (?, 'n.pdf', 'application/pdf', 'cc/x', NULL, 30, CURRENT_TIMESTAMP)`),
+		f.Store.Rebind(`INSERT INTO attachments (message_id, part_index, filename, mime_type, storage_path, content_hash, size, created_at)
+		 VALUES (?, 0, 'n.pdf', 'application/pdf', 'cc/x', NULL, 30, CURRENT_TIMESTAMP)`),
 		nullHashMsg,
 	)
 	require.NoError(err, "insert null-hash attachment")
 
 	// Attachment with empty storage_path (must be excluded).
 	emptyPathMsg := f.CreateMessage("msg-empty-path")
-	err = f.Store.UpsertAttachment(emptyPathMsg, "e.pdf", "application/pdf",
+	err = f.Store.UpsertAttachment(emptyPathMsg, 0, "e.pdf", "application/pdf",
 		"", "emptypathhash", 40)
 	require.NoError(err, "upsert empty-path attachment")
 
 	// URL-backed attachment rows are links, not local files to clean up.
 	urlBackedMsg := f.CreateMessage("msg-url-backed")
 	_, err = f.Store.DB().Exec(
-		f.Store.Rebind(`INSERT INTO attachments (message_id, filename, mime_type, storage_path, content_hash, size, created_at)
-		 VALUES (?, 'deck.pptx', 'reference', 'https://sp/deck.pptx', '', 0, CURRENT_TIMESTAMP)`),
+		f.Store.Rebind(`INSERT INTO attachments (message_id, part_index, filename, mime_type, storage_path, content_hash, size, created_at)
+		 VALUES (?, 0, 'deck.pptx', 'reference', 'https://sp/deck.pptx', '', 0, CURRENT_TIMESTAMP)`),
 		urlBackedMsg,
 	)
 	require.NoError(err, "insert URL-backed attachment")
@@ -96,7 +96,7 @@ func TestStore_AttachmentPathsUniqueToSource(t *testing.T) {
 	// Two messages in the default source referencing the same unique hash
 	// should collapse to a single storage_path in the result.
 	dupMsg := f.CreateMessage("msg-dup-hash")
-	err = f.Store.UpsertAttachment(dupMsg, "u.pdf", "application/pdf",
+	err = f.Store.UpsertAttachment(dupMsg, 0, "u.pdf", "application/pdf",
 		"aa/uniquehash", "uniquehash", 10)
 	require.NoError(err, "upsert duplicate-of-unique attachment")
 
@@ -132,7 +132,7 @@ func TestStore_IsAttachmentPathReferenced(t *testing.T) {
 	f := storetest.New(t)
 
 	msgID := f.CreateMessage("msg-ref-1")
-	err := f.Store.UpsertAttachment(msgID, "a.pdf", "application/pdf",
+	err := f.Store.UpsertAttachment(msgID, 0, "a.pdf", "application/pdf",
 		"aa/hash1", "hash1", 10)
 	require.NoError(err, "UpsertAttachment")
 

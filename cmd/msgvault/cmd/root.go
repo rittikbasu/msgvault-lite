@@ -310,7 +310,7 @@ func ExecuteContext(ctx context.Context) error {
 }
 
 var liteCommandNames = map[string]struct{}{
-	"add-account": {},
+	cmdAddAccount: {},
 	"backup":      {},
 	"completion":  {},
 	"logs":        {},

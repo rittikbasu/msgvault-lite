@@ -205,66 +205,7 @@ func PrintHeadlessInstructions(email, tokensDir, oauthApp string) {
 	fmt.Println(addCmd)
 	fmt.Println()
 	fmt.Println("The token will be detected and the account registered. No browser needed.")
-	fmt.Println("All msgvault commands (sync, tui, etc.) will work normally.")
-	fmt.Println()
-}
-
-// PrintCalendarHeadlessInstructions prints setup instructions for adding
-// Calendar access on a headless server. As with Gmail, Google's device flow
-// does not support Calendar scopes, so the operator must authorize on a machine
-// with a browser and copy the token file to the server. Calendar re-consent
-// REPLACES the granted scopes, so the browser machine must keep existing
-// permissions plus Calendar checked or access is dropped.
-// tokensDir should be the configured tokens directory (e.g., cfg.TokensDir()).
-func PrintCalendarHeadlessInstructions(email, tokensDir, oauthApp string) {
-	tokenFile := sanitizeEmail(email) + ".json"
-	tokenPath := filepath.Join(tokensDir, tokenFile)
-
-	addCmd := "    msgvault add-calendar " + email
-	syncCmd := "    msgvault sync-calendar " + email
-	if oauthApp != "" {
-		addCmd += " --oauth-app " + oauthApp
-		syncCmd += " --oauth-app " + oauthApp
-	}
-
-	fmt.Println()
-	fmt.Println("=== Headless Server Calendar Setup ===")
-	fmt.Println()
-	fmt.Println("A headless server cannot complete Google's browser consent, and the OAuth")
-	fmt.Println("device flow does not support Calendar scopes. Authorize on a machine with a")
-	fmt.Println("browser and copy the token to your server.")
-	fmt.Println()
-	fmt.Println("Step 0: If this account already has a token on the headless server, copy")
-	fmt.Println("        that existing token to the browser machine first. This lets")
-	fmt.Println("        add-calendar preserve Drive or other previously granted scopes:")
-	fmt.Println()
-	fmt.Printf("    mkdir -p %s\n", shellQuote(tokensDir))
-	fmt.Printf("    scp user@server:%s %s\n", shellQuote(tokenPath), shellQuote(tokenPath))
-	fmt.Println()
-	fmt.Println("        Skip this step only when no token exists yet.")
-	fmt.Println()
-	fmt.Println("Step 1: On a machine with a browser (using the SAME client_secret.json as the")
-	fmt.Println("        server), run:")
-	fmt.Println()
-	fmt.Println(addCmd)
-	fmt.Println()
-	fmt.Println("        On the consent screen, keep all existing permissions plus Calendar")
-	fmt.Println("        checked — re-consent REPLACES scopes, so unchecking an existing")
-	fmt.Println("        permission would drop that access.")
-	fmt.Println()
-	fmt.Println("Step 2: Copy the token file to your headless server, replacing the existing one:")
-	fmt.Println()
-	fmt.Printf("    ssh user@server mkdir -p %s\n", shellQuote(tokensDir))
-	fmt.Printf("    scp %s user@server:%s\n", shellQuote(tokenPath), shellQuote(tokenPath))
-	fmt.Println()
-	fmt.Println("Step 3: On the headless server, register the calendars (no browser needed)")
-	fmt.Println("        and sync:")
-	fmt.Println()
-	fmt.Println(addCmd)
-	fmt.Println(syncCmd)
-	fmt.Println()
-	fmt.Println("The copied token carries Calendar plus the existing Google permissions,")
-	fmt.Println("so current sync jobs keep working.")
+	fmt.Println("The account can now be synced normally.")
 	fmt.Println()
 }
 

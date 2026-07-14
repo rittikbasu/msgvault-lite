@@ -26,18 +26,14 @@ var syncIncrementalCmd = &cobra.Command{
 This is faster than a full sync as it only fetches changes since the last sync.
 Requires a prior full sync to establish the history ID baseline.
 
-IMAP accounts do not support incremental sync, so they are automatically
-synced using a full sync instead.
-
-If no email is specified, syncs all accounts that have credentials configured.
-Accounts without tokens or history IDs are skipped.
+If no email is specified, syncs the configured Gmail account.
 
 If history is too old (Gmail returns 404), automatically falls back to a full
 sync, which is resumable and skips already-archived messages.
 
 Examples:
-  msgvault sync                 # Sync all accounts
-  msgvault sync you@gmail.com   # Sync specific account`,
+  msgvault sync
+  msgvault sync you@gmail.com`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSyncIncrementalLocal(cmd, args)

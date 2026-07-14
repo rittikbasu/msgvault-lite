@@ -1,7 +1,6 @@
 # Go binaries
 /msgvault
 /msgvault.exe
-/mimeshootout
 
 # Database files
 *.db
@@ -23,7 +22,6 @@ oauth_client*.json
 
 # Local development state
 .beads/
-.mcp.json
 /.hermes/
 
 # Local msgvault runtime state
@@ -58,15 +56,4 @@ result
 # Testify migration coverage baseline
 .testify-coverage/
 
-# Docs build, tool state, and hydrated assets
-docs/.venv/
-docs/.vercel/
-docs/.env*.local
-docs/.gitignore
-docs/site/
-docs/zensical-public-docs.*/
-docs/.zensical-build.*
-docs/assets/static/
-docs/assets/generated/
-docs/screenshots/demo-data/
 .kata.local.toml

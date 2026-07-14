@@ -82,9 +82,7 @@ var verifyCmd = &cobra.Command{
 and sampling messages to ensure raw MIME data is intact.
 
 This command:
-1. On SQLite: runs PRAGMA integrity_check on the database (unless --skip-db-check).
-   On PostgreSQL: prints a notice that the in-engine check is skipped — use
-   pg_amcheck out-of-band to validate the cluster.
+1. Runs SQLite PRAGMA integrity_check (unless --skip-db-check)
 2. Compares local message count with Gmail's reported total
 3. Checks how many messages have raw MIME data stored
 4. Samples random messages and verifies their MIME can be decompressed

@@ -29,10 +29,7 @@ var (
 var logsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "View and tail msgvault's structured log files",
-	Long: `Show msgvault's structured log output from the selected daemon's
-on-disk logs: the JSON logs under <data dir>/logs and the background
-daemon's <data dir>/serve.log. With [remote].url configured, this shows the
-remote daemon's logs; otherwise it starts or contacts the local daemon.
+	Long: `Show msgvault's structured JSON logs from <data dir>/logs.
 
 By default this prints the last 50 lines of today's log file in a
 compact, human-friendly format (level + run_id + message + the
@@ -46,7 +43,7 @@ Examples:
   msgvault logs -n 200 --follow       # tail with --follow
   msgvault logs --run-id a1b2c3d4     # just one run
   msgvault logs --level error         # only errors
-  msgvault logs --grep deduplicate    # substring over the JSON
+  msgvault logs --grep sync           # substring over the JSON
   msgvault logs --all                 # every log file we still have
   msgvault logs --path                # print the log path and exit`,
 	Args: cobra.NoArgs,
@@ -67,14 +64,13 @@ func runLogsCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	dir := cfg.LogsDir()
-	serveLogPath := filepath.Join(cfg.Data.DataDir, "serve.log")
 
 	if logsPath {
 		fmt.Println(dir)
 		return nil
 	}
 
-	files, err := findLogFiles(dir, serveLogPath, logsAll)
+	files, err := findLogFiles(dir, logsAll)
 	if err != nil {
 		return err
 	}
@@ -109,34 +105,20 @@ func runLogsCmd(cmd *cobra.Command, args []string) error {
 	return followLogFile(cmd.Context(), latest, filter, cmd.OutOrStdout())
 }
 
-// findLogFiles returns the sorted list of log files to read. The daemon's
-// serveLogPath (the background daemon's serve.log, written outside the logs
-// dir) is always included when it exists, so `logs` can surface the running
-// daemon's output. When all is false, it returns today's structured log file
-// (if present) plus serve.log; when all is true it returns every regular file
-// in the logs directory (not just the msgvault-YYYY-MM-DD.log pattern) plus
-// serve.log.
-func findLogFiles(dir, serveLogPath string, all bool) ([]string, error) {
-	appendIfExists := func(files []string, path string) []string {
-		if path == "" {
-			return files
-		}
-		if _, err := os.Stat(path); err == nil {
-			return append(files, path)
-		}
-		return files
-	}
-
+// findLogFiles returns the sorted local log files to read. When all is false,
+// it returns today's structured log file, falling back to the newest
+// msgvault-*.log files. When all is true, every regular file in the logs
+// directory is included.
+func findLogFiles(dir string, all bool) ([]string, error) {
 	dirFiles, err := logDirFiles(dir, all)
 	if err != nil {
 		return nil, err
 	}
 
-	files := appendIfExists(dirFiles, serveLogPath)
-	sort.Slice(files, func(i, j int) bool {
-		return logFileSortKey(files[i]) < logFileSortKey(files[j])
+	sort.Slice(dirFiles, func(i, j int) bool {
+		return logFileSortKey(dirFiles[i]) < logFileSortKey(dirFiles[j])
 	})
-	return files, nil
+	return dirFiles, nil
 }
 
 // logDirFiles returns the log files inside dir. When all is false it returns
@@ -236,10 +218,9 @@ func (f logFilter) matches(raw []byte, rec map[string]any) bool {
 }
 
 // renderLogLine decodes a single raw log line and, if it passes filter,
-// returns its human-readable form. It accepts JSON records (the structured
-// logs directory) and logfmt records (the daemon's serve.log); lines that are
-// neither (e.g. serve.log restart banners) are passed through verbatim as long
-// as no level filter is active.
+// returns its human-readable form. It accepts JSON and logfmt records; lines
+// that are neither are passed through verbatim as long as no level filter is
+// active.
 func renderLogLine(raw []byte, filter logFilter) (string, bool) {
 	if rec, ok := parseLogRecord(raw); ok {
 		if !filter.matches(raw, rec) {

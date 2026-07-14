@@ -51,9 +51,8 @@ func archiveOwnedError(dataDir string) error {
 
 // openStoreAndInitWith opens the local archive and initializes schema while the
 // caller owns the direct-writer lock. store.Open + InitSchema create the
-// database file on first use, which is the right behavior for a
-// freshly-installed CLI; init-db remains the explicit setup command for users
-// who want to pre-create the DB.
+// database file on the first write command, which is the right behavior for a
+// freshly installed CLI.
 func openStoreAndInitWith(migrate func(*store.Store) error) (*store.Store, error) {
 	dbPath := cfg.DatabaseDSN()
 	st, err := store.Open(dbPath)

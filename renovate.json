@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "dependencyDashboard": true,
-  "enabledManagers": ["dockerfile", "github-actions", "gomod"],
+  "enabledManagers": ["github-actions", "gomod"],
   "osvVulnerabilityAlerts": true,
   "minimumReleaseAge": "7 days",
   "minimumReleaseAgeBehaviour": "timestamp-required",
@@ -13,11 +13,6 @@
     "prCreation": "immediate"
   },
   "packageRules": [
-    {
-      "matchManagers": ["dockerfile"],
-      "groupName": "Dockerfile dependencies",
-      "groupSlug": "dockerfile-dependencies"
-    },
     {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions dependencies",

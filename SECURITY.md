@@ -1,84 +1,58 @@
-# Security Policy
+# security policy
 
-## Reporting Vulnerabilities
+## reporting a vulnerability
 
-If you discover a security vulnerability in msgvault, please report it responsibly:
+please do not open a public issue for a security vulnerability. use GitHub private vulnerability reporting or contact the maintainer privately with reproduction steps, impact, and any suggested fix.
 
-1. **Do NOT open a public GitHub issue**
-2. Email the maintainer directly or use GitHub's private vulnerability reporting feature
-3. Include steps to reproduce, impact assessment, and any suggested fixes
-4. Allow reasonable time for a fix before public disclosure
+## threat model
 
-## Threat Model
+msgvault is a single-user local CLI. it has no server, remote API, multi-user permission model, or privilege separation. anyone who can run commands as the archive owner can already read and modify the same files as msgvault.
 
-### What msgvault protects
+The important assets are:
 
-| Asset | Storage | Risk if compromised |
-|-------|---------|-------------------|
-| OAuth2 tokens | `~/.msgvault/tokens/` (per-account files) | Full Gmail API access to victim's account |
-| Email bodies | SQLite database (`~/.msgvault/msgvault.db`) | Exposure of 20+ years of personal email |
-| Attachments | Content-addressed files (`~/.msgvault/attachments/`) | Exposure of personal documents |
-| Contact metadata | SQLite (participants table) | Social graph exposure |
-| Search indexes | FTS5 virtual table in SQLite | Keyword-level exposure of email content |
-| Analytics cache | Parquet files (`~/.msgvault/analytics/`) | Aggregate email metadata exposure |
+| asset | default location | impact if exposed |
+|---|---|---|
+| Gmail OAuth token | `~/.msgvault/tokens/` | read access to the authorized Gmail account |
+| archive database | `~/.msgvault/msgvault.db` | message metadata, bodies, labels, and search index |
+| attachments | `~/.msgvault/attachments/` | archived files and documents |
+| config | `~/.msgvault/config.toml` | local paths and possibly sensitive configuration |
+| backups | user-selected repository | a copy of archived data and any explicitly included secrets |
 
-### Security controls in place
+msgvault requests read-only Gmail access. it does not trash, delete, send, label, or otherwise mutate remote mail.
 
-**File permissions:**
-- OAuth token files created with 0600 permissions (owner read/write only)
-- Config directory (`~/.msgvault/`) should be 0700
-- Attachment storage directory (`~/.msgvault/attachments/`) is created with 0700; attachment files are 0600
-- Cross-platform support including Windows DACL
+## controls
 
-**SQL injection prevention:**
-- All SQLite queries use parameterized statements via `database/sql`
-- DuckDB queries over Parquet files use parameterized queries
-- No string concatenation for query building
+- OAuth tokens and other credential files are written with owner-only permissions
+- private directories use owner-only permissions where the platform supports them
+- SQLite queries use parameterized statements
+- attachment content is addressed by SHA-256 rather than user-controlled path components
+- OAuth callback state is validated
+- full and incremental sync preserve raw MIME and use resumable checkpoints
+- GitHub Actions are pinned to commit SHAs
+- `govulncheck` runs in CI
 
-**Command injection prevention:**
-- OAuth browser launch uses validated, well-formed URLs only
-- No user-controlled input passed to `exec.Command` or shell execution
+## limitations
 
-**Path traversal prevention:**
-- Attachment storage uses content-hash addressing (SHA-256)
-- Config paths resolved relative to a fixed base directory
-- No user-controlled path components in file operations
+### no application-level encryption
 
-**Input validation:**
-- MIME parsing with charset detection (gogs/chardet) and safe encoding conversion
-- Email addresses validated before database insertion
-- Gmail API message IDs validated as alphanumeric
+The database, attachments, OAuth tokens, and backup repositories are not encrypted by msgvault. filesystem access as the archive owner is enough to read them. use full-disk encryption such as FileVault, BitLocker, or LUKS, and protect backup media separately.
 
-### Known limitations
+### secrets in backups are opt-in
 
-**No encryption at rest:**
-- The SQLite database is not encrypted. Anyone with filesystem access to `~/.msgvault/` can read all archived emails.
-- OAuth tokens are stored as plaintext JSON files (protected by file permissions only).
-- Mitigation: Rely on OS-level full-disk encryption (FileVault, BitLocker, LUKS).
+Backup snapshots exclude config and OAuth tokens by default. including them requires explicit flags. an unencrypted backup repository also requires an additional acknowledgement before plaintext secrets can be captured.
 
-**CGO dependencies:**
-- SQLite (mattn/go-sqlite3) and DuckDB (marcboeker/go-duckdb) use CGO, introducing native code that is harder to audit than pure Go.
-- Mitigation: Pin dependency versions, use govulncheck in CI, review updates via Dependabot.
+### native dependencies
 
-**Gmail API deletion:**
-- msgvault can stage and execute deletions via the Gmail API (trash or permanent delete).
-- Mitigation: Deletion requires explicit user action, manifests are generated before execution, and the operation is logged.
+The current build uses CGO for SQLite and, while the analytics carve is in progress, DuckDB. native dependencies increase supply-chain and memory-safety exposure compared with pure Go. versions are pinned in `go.mod`; dependency updates should be reviewed and tested.
 
-## Automated Security Review
+## safe reports
 
-External pull requests are automatically reviewed by a Claude-powered security bot that checks for:
-- Hardcoded secrets and credential exposure
-- Command/SQL injection vulnerabilities
-- Path traversal and file permission issues
-- OAuth token handling problems
-- Dependency supply chain risks (go.mod/go.sum changes)
-- Workflow tampering (.github/ directory changes)
+A useful report includes:
 
-See [`.github/SECURITY_BOT.md`](.github/SECURITY_BOT.md) for details.
+- affected command and version
+- minimal reproduction
+- expected and actual behavior
+- whether real credentials or mail data were exposed
+- platform and filesystem details relevant to the issue
 
-## Supply Chain
-
-- **Dependabot** monitors Go modules and GitHub Actions for updates
-- **govulncheck** runs on every PR (call-graph aware, Go vulnerability database)
-- **CODEOWNERS** requires maintainer approval for go.mod, go.sum, and .github/ changes
-- **GitHub Actions pinned to commit SHAs** to prevent tag-based supply chain attacks
+Do not attach real OAuth tokens, client-secret JSON, message bodies, or private archive files.

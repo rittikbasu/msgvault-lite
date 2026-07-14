@@ -228,8 +228,7 @@ func (s *Store) RunStartupMigrations(legacyIdentityAddresses []string) (StartupM
 	case applied:
 		res.Notice = fmt.Sprintf(
 			"Migrated legacy [identity] config to per-account identities (%d addresses across %d accounts).\n"+
-				"Run 'msgvault identity list' to review per-account identities;\n"+
-				"the [identity] block in config.toml is no longer used.",
+				"The [identity] block in config.toml is no longer used.",
 			addrs, sources,
 		)
 	}

@@ -70,9 +70,7 @@ single binary.`,
 
 		// Skip config loading (and therefore logging setup) for
 		// commands that must run without touching disk or config.
-		if cmd.Name() == "version" || cmd.Name() == "update" ||
-			cmd.Name() == "quickstart" || cmd.Name() == "openapi" ||
-			cmd.Name() == "completion" ||
+		if cmd.Name() == "version" || cmd.Name() == "completion" ||
 			cmd.Name() == cobra.ShellCompRequestCmd ||
 			cmd.Name() == cobra.ShellCompNoDescRequestCmd {
 			cmd.SilenceUsage = false
@@ -387,8 +385,8 @@ func oauthSetupHint() string {
 	}
 	hint := fmt.Sprintf(`
 To use msgvault, you need a Google Cloud OAuth credential:
-  1. Follow the setup guide: https://msgvault.io/guides/oauth-setup/
-  2. Download the client_secret.json file
+  1. Enable the Gmail API and create a Desktop OAuth client in Google Cloud
+  2. Download its client_secret.json file
   3. Create or edit %s:
        [oauth]
        client_secrets = "/path/to/client_secret.json"`, configPath)
@@ -518,12 +516,9 @@ func getTokenSourceWithReauth(
 		return nil, fmt.Errorf("get token source for %s: %w", email, err)
 	}
 
-	// Non-interactive session cannot open a browser for reauth.
-	// This runs inside the daemon's non-TTY CLI subprocess, where the
-	// remedy is to re-authorize out of band. On a desktop, add-account's
-	// --force browser flow works even from here (it opens its own loopback
-	// callback). On a headless server with no browser, --headless prints
-	// device-code instructions instead (--force is browser-only).
+	// A non-interactive session cannot open a browser for reauthorization.
+	// On a desktop, add-account --force opens its own loopback callback. On a
+	// headless server, --headless prints token-copy instructions instead.
 	if !interactive {
 		return nil, fmt.Errorf(
 			"token for %s is expired or revoked; %s",
@@ -542,12 +537,12 @@ func getTokenSourceWithReauth(
 		if errors.As(authErr, &mismatch) {
 			return nil, fmt.Errorf(
 				"re-authorize %s: %w\n"+
-					"If this account uses an alias, remove "+
-					"and re-add with the primary address:\n"+
-					"  msgvault remove-account %s --type gmail\n"+
-					"  msgvault add-account %s",
+					"This archive is configured with an alias. msgvault requires the "+
+					"primary address %s. Preserve the current archive and start a "+
+					"replacement with:\n"+
+					"  msgvault --home <new-directory> add-account %s",
 				email, authErr,
-				mismatch.Expected, mismatch.Actual,
+				mismatch.Actual, mismatch.Actual,
 			)
 		}
 		return nil, fmt.Errorf("re-authorize %s: %w", email, authErr)

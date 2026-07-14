@@ -28,14 +28,12 @@ func TestErrOAuthNotConfigured(t *testing.T) {
 	// Should contain the main message
 	assert.Contains(msg, "OAuth client secrets not configured", "missing 'not configured'")
 
-	// Should contain either:
-	// 1. A "Found OAuth credentials" hint (if client_secret*.json exists on this machine)
-	// 2. The setup URL (if no credentials found)
+	// Should contain either a discovered local credential or inline setup steps.
 	hasFoundHint := strings.Contains(msg, "Found OAuth credentials at:")
-	hasSetupURL := strings.Contains(msg, "https://msgvault.io/guides/oauth-setup/")
+	hasSetupHint := strings.Contains(msg, "create a Desktop OAuth client")
 
-	assert.True(hasFoundHint || hasSetupURL,
-		"error message missing both 'Found OAuth credentials' hint and setup URL: %q", msg)
+	assert.True(hasFoundHint || hasSetupHint,
+		"error message missing both discovered credentials and inline setup steps: %q", msg)
 
 	// Should contain config file instructions (either "config.toml" or "<config file>" placeholder)
 	assert.Contains(msg, "config", "error message missing config reference")
@@ -50,8 +48,7 @@ func TestWrapOAuthError_NotExist(t *testing.T) {
 
 	// Should contain accessible message (not "not found" anymore)
 	assert.Contains(t, msg, "not accessible", "missing 'not accessible'")
-	// Should contain setup hint
-	assert.Contains(t, msg, "https://msgvault.io/guides/oauth-setup/", "missing setup URL")
+	assert.Contains(t, msg, "create a Desktop OAuth client", "missing setup steps")
 }
 
 func TestWrapOAuthError_Permission(t *testing.T) {
@@ -63,8 +60,7 @@ func TestWrapOAuthError_Permission(t *testing.T) {
 
 	// Should contain accessible message
 	assert.Contains(t, msg, "not accessible", "missing 'not accessible'")
-	// Should contain setup hint
-	assert.Contains(t, msg, "https://msgvault.io/guides/oauth-setup/", "missing setup URL")
+	assert.Contains(t, msg, "create a Desktop OAuth client", "missing setup steps")
 }
 
 func TestWrapOAuthError_OtherError(t *testing.T) {
@@ -551,7 +547,7 @@ func TestGetTokenSourceWithReauth(t *testing.T) {
 		_, err := getTokenSourceWithReauth(context.Background(), mock, "user@example.com", true, gmailReauthHint)
 		require.Error(t, err)
 		msg := err.Error()
-		for _, want := range []string{"remove-account", "add-account", "primary address"} {
+		for _, want := range []string{"primary address", "--home <new-directory>", "other@example.com"} {
 			assert.Contains(t, msg, want, "error message missing %q", want)
 		}
 		// Confirm the underlying TokenMismatchError is preserved.
@@ -561,9 +557,8 @@ func TestGetTokenSourceWithReauth(t *testing.T) {
 	})
 
 	// Additional assertion for the non-interactive case: verify the error
-	// points at both actionable remedies — add-account --force (browser, works
-	// even from the daemon's non-TTY CLI subprocess) and --headless (device
-	// code, for a headless server with no browser).
+	// points at both actionable remedies — add-account --force for a browser
+	// session and --headless for a server without a browser.
 	t.Run("non-interactive error points at add-account remedies", func(t *testing.T) {
 		mock := &mockReauthorizer{
 			tokenSourceFn: func(_ context.Context, _ string) (extOAuth2.TokenSource, error) {

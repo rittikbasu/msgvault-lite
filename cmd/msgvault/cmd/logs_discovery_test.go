@@ -15,35 +15,26 @@ func writeFile(t *testing.T, path, content string) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600), "write %s", path)
 }
 
-func TestFindLogFilesIncludesServeLog(t *testing.T) {
+func TestFindLogFilesEmpty(t *testing.T) {
 	dir := t.TempDir()
-	dataDir := t.TempDir()
-	serveLog := filepath.Join(dataDir, "serve.log")
-	writeFile(t, serveLog, "--- serve start ---\n")
-
-	// Logs dir exists but has no structured log for today.
-	files, err := findLogFiles(dir, serveLog, false)
+	files, err := findLogFiles(dir, false)
 	require.NoError(t, err, "findLogFiles")
-	assert.Contains(t, files, serveLog, "serve.log must be discovered even with an empty logs dir")
+	assert.Empty(t, files)
 }
 
 func TestFindLogFilesAllIncludesNonPatternFiles(t *testing.T) {
 	dir := t.TempDir()
 	embed := filepath.Join(dir, "embed-full.log")
 	writeFile(t, embed, "{}\n")
-	dataDir := t.TempDir()
-	serveLog := filepath.Join(dataDir, "serve.log")
-	writeFile(t, serveLog, "banner\n")
 
-	files, err := findLogFiles(dir, serveLog, true)
+	files, err := findLogFiles(dir, true)
 	require.NoError(t, err, "findLogFiles --all")
 	assert.Contains(t, files, embed, "--all must include non msgvault-* files")
-	assert.Contains(t, files, serveLog, "--all must include serve.log")
 }
 
 // TestFindLogFilesNonAllFallbackExcludesNonPatternFiles verifies that when
 // today's structured log is missing, the non-all fallback scan is limited to
-// structured msgvault-*.log files (plus serve.log) and does not surface
+// structured msgvault-*.log files and does not surface
 // unrelated files sitting in the logs dir. The unrestricted scan is --all only.
 func TestFindLogFilesNonAllFallbackExcludesNonPatternFiles(t *testing.T) {
 	assert := assert.New(t)
@@ -54,25 +45,10 @@ func TestFindLogFilesNonAllFallbackExcludesNonPatternFiles(t *testing.T) {
 	// An unrelated file (should NOT be picked up without --all).
 	unrelated := filepath.Join(dir, "embed-full.log")
 	writeFile(t, unrelated, "{}\n")
-	dataDir := t.TempDir()
-	serveLog := filepath.Join(dataDir, "serve.log")
-	writeFile(t, serveLog, "banner\n")
-
-	files, err := findLogFiles(dir, serveLog, false)
+	files, err := findLogFiles(dir, false)
 	require.NoError(t, err, "findLogFiles")
 	assert.Contains(files, structured, "structured log must be discovered in the fallback")
-	assert.Contains(files, serveLog, "serve.log must be discovered")
 	assert.NotContains(files, unrelated, "non-all fallback must not surface unrelated files")
-}
-
-func TestFindLogFilesServeLogMissing(t *testing.T) {
-	dir := t.TempDir()
-	dataDir := t.TempDir()
-	serveLog := filepath.Join(dataDir, "serve.log") // does not exist
-
-	files, err := findLogFiles(dir, serveLog, true)
-	require.NoError(t, err, "findLogFiles")
-	assert.NotContains(t, files, serveLog, "missing serve.log must not be listed")
 }
 
 func TestParseLogfmtRecord(t *testing.T) {

@@ -36,14 +36,14 @@ var syncFullCmd = &cobra.Command{
 Downloads all messages matching the query (or all messages if no query).
 Supports resumption from interruption - just run again to continue.
 
-If no email is specified, syncs all configured accounts sequentially.
+If no email is specified, syncs the configured Gmail account.
 
 Date filters:
   --after 2024-01-01     Only messages on or after this date
   --before 2024-12-31    Only messages before this date
 
 Examples:
-  msgvault sync-full                             # Sync all accounts
+  msgvault sync-full
   msgvault sync-full you@gmail.com
   msgvault sync-full you@gmail.com --after 2024-01-01
   msgvault sync-full you@gmail.com --query "from:someone@example.com"

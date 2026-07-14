@@ -81,9 +81,6 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Check OpenAPI artifacts
-        run: make openapi-check
-
       - name: Lint
         run: make lint-ci
 
@@ -139,50 +136,6 @@ jobs:
           name: msgvault-windows-amd64
           path: msgvault.exe
 
-  # pgvector lane: runs every pgvector-tagged test against a live
-  # pgvector/pgvector image — backend, embed queue/worker/enqueue, hybrid
-  # filter, scheduler embed-job, and serve/search CLI. The `pgvector` build
-  # tag is required; without it these files compile out and ship no tests,
-  # so this code would otherwise have zero CI coverage.
-  test-pgvector:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: msgvault_test
-          POSTGRES_PASSWORD: testpw
-          POSTGRES_DB: msgvault_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U msgvault_test -d msgvault_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      MSGVAULT_TEST_DB: postgres://msgvault_test:testpw@localhost:5432/msgvault_test
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-
-      - name: Install psql client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
-      - name: Enable pgvector extension
-        env:
-          PGPASSWORD: testpw
-        run: |
-          psql -h localhost -U msgvault_test -d msgvault_test -c "CREATE EXTENSION IF NOT EXISTS vector"
-
-      - name: Test (pgvector-tagged)
-        run: go test -tags "fts5 sqlite_vec pgvector" -count=1 ./internal/vector/... ./internal/scheduler/... ./cmd/msgvault/cmd/...
-
   nix-build:
     runs-on: ubuntu-latest
     steps:
@@ -192,46 +145,3 @@ jobs:
 
       - name: Build
         run: nix build
-
-  # PostgreSQL backend lane: runs the full Go test suite against a live
-  # PostgreSQL service. Tests that use testutil.NewTestStore read
-  # MSGVAULT_TEST_DB and switch backends without a recompile. Concurrency
-  # tests use -count=5 so non-deterministic races (lost updates, missing
-  # unique constraints) surface here rather than slipping past a single
-  # pass.
-  test-postgres:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: msgvault_test
-          POSTGRES_PASSWORD: msgvault_test
-          POSTGRES_DB: msgvault_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      MSGVAULT_TEST_DB: postgres://msgvault_test:msgvault_test@localhost:5432/msgvault_test?sslmode=disable
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-
-      # This lane uses a stock postgres:16 image (no pgvector extension), so it
-      # must NOT build the pgvector tag — those tests CREATE EXTENSION "vector"
-      # and fail here. pgvector is covered by the dedicated test-pgvector job
-      # against a pgvector/pgvector image. (Run go test directly rather than
-      # `make test-pg`, whose PG_TEST_TAGS include pgvector.)
-      - name: Test (PostgreSQL)
-        run: go test -tags "fts5 sqlite_vec" ./...
-
-      - name: Concurrency tests (-count=5)
-        run: |
-          go test -tags fts5 -count=5 -run 'Concurrent' ./internal/store

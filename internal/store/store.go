@@ -205,7 +205,7 @@ func OpenReadOnly(dbPath string) (*Store, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf(
 			"database not found: %s "+
-				"(run 'msgvault init-db' first)", dbPath,
+				"(run 'msgvault add-account <email>' first)", dbPath,
 		)
 	}
 

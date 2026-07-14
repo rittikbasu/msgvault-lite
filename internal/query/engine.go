@@ -7,10 +7,7 @@ import (
 	"go.kenn.io/msgvault/internal/search"
 )
 
-// Engine provides query operations for msgvault data.
-// This interface can be implemented by different backends:
-// - SQLiteEngine: Direct SQLite queries (flexible, moderate performance)
-// - ParquetEngine: Arrow/Parquet queries (fast aggregates, read-only).
+// Engine is the interface for SQLite query operations.
 type Engine interface {
 	// Aggregate performs grouping based on the provided ViewType (Sender, Domain, etc.)
 	Aggregate(ctx context.Context, groupBy ViewType, opts AggregateOptions) ([]AggregateRow, error)
@@ -45,7 +42,6 @@ type Engine interface {
 	Search(ctx context.Context, query *search.Query, limit, offset int) ([]MessageSummary, error)
 
 	// SearchFast searches message metadata only (no body text).
-	// This is much faster for large archives as it queries Parquet files directly.
 	// Searches: subject, sender email/name (case-insensitive).
 	// The filter parameter allows contextual search within a drill-down.
 	SearchFast(ctx context.Context, query *search.Query, filter MessageFilter, limit, offset int) ([]MessageSummary, error)
@@ -54,11 +50,8 @@ type Engine interface {
 	// This is used for pagination UI to show "N of M results".
 	SearchFastCount(ctx context.Context, query *search.Query, filter MessageFilter) (int64, error)
 
-	// SearchFastWithStats performs a fast metadata search and returns paginated
-	// results, total count, and aggregate stats in a single operation. The DuckDB
-	// implementation materializes matching IDs into a temp table with one Parquet
-	// scan, then reuses it for count, pagination, and stats — replacing 3-4
-	// separate scans with one.
+	// SearchFastWithStats performs a metadata search and returns paginated
+	// results, total count, and aggregate stats in one response.
 	//
 	// queryStr is the raw search string (needed for stats; search.Query doesn't store it).
 	// statsGroupBy controls which view's key columns are used for stats search filtering.

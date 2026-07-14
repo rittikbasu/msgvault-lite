@@ -59,9 +59,11 @@ internal/testutil/            non-assertion test helpers
 
 The database is the durable system of record. Gmail deletions become local tombstones; archived content is not deleted. attachments are content-addressed on disk. OAuth tokens and credential files must retain private permissions.
 
-### transition note
+### analytics decision
 
-The repository is being carved down from a broader upstream project. DuckDB analytics, PostgreSQL branches, and base vector/config code may still exist temporarily while the SQLite-vs-DuckDB benchmark is completed. Treat those as removal candidates, not supported product surface. Do not expand them.
+A benchmark on a copied 34,176-message archive found SQLite warm latency of 34 ms for total stats and 80-174 ms for unused aggregate views. DuckDB improved those unused aggregates to 22-38 ms, but added cache freshness semantics, runtime extension logic, a roughly 40x engine startup cost, and 68 MB to the binary. No retained command exposes those aggregate views, so DuckDB and Parquet analytics were removed.
+
+The remaining PostgreSQL, vector, daemon, and provider fields in shared config/store packages are inherited carve residue. Do not expand them; remove them while preserving SQLite schema compatibility for existing archives.
 
 ## common commands
 

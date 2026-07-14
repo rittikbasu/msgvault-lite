@@ -24,18 +24,8 @@ $ldflags = @(
 
 $env:CGO_ENABLED = 1
 
-# sqlite_vec on Windows + MinGW needs a specific set of C/linker flags,
-# each of which must be present no matter what the user already exported
-# in CGO_CFLAGS/CGO_LDFLAGS:
-#   - -IC:/msys64/mingw64/include points to the MSYS2-provided sqlite3.h.
-#   - -fgnu89-inline makes arrow-go/v18's plain `inline` helpers emit an
-#     external definition; otherwise MinGW 15 leaves ArrowArrayIsReleased
-#     and friends undefined at link time.
-#   - -Wl,--allow-multiple-definition then tells ld to keep the first of
-#     the duplicate externals the previous flag produces in every TU.
-# Append each flag only when missing, so users who already set their own
-# CGO_CFLAGS/CGO_LDFLAGS (e.g. a custom SQLite include path) don't get
-# them silently overwritten.
+# sqlite_vec on Windows + MinGW needs the MSYS2-provided sqlite3.h.
+# Append the include flag only when missing so a custom path is preserved.
 function Add-CgoFlag([string]$var, [string]$flag) {
     $existing = [Environment]::GetEnvironmentVariable($var, 'Process')
     if (-not $existing) {
@@ -48,9 +38,6 @@ function Add-CgoFlag([string]$var, [string]$flag) {
 if (Test-Path "C:\msys64\mingw64\include\sqlite3.h") {
     Add-CgoFlag "CGO_CFLAGS" "-IC:/msys64/mingw64/include"
 }
-Add-CgoFlag "CGO_CFLAGS" "-fgnu89-inline"
-Add-CgoFlag "CGO_LDFLAGS" "-Wl,--allow-multiple-definition"
-
 Write-Host "Building msgvault $version ($commit)..."
 & go build -tags "fts5 sqlite_vec" -ldflags "$ldflags" -o msgvault.exe ./cmd/msgvault
 if ($LASTEXITCODE -ne 0) {

@@ -13,13 +13,13 @@ buildGoModule {
 
   src = gitignoreSource ../.;
 
-  vendorHash = "sha256-4IKG/XSnr8vxezhqzIE+LFihILPmSTIiYcv+zvnCH6k=";
+  vendorHash = "sha256-6HSmNw/CTjtO8RxFNVwupGm2vUifoJGX2slxbimcOVE=";
   proxyVendor = true;
 
   subPackages = [ "cmd/msgvault" ];
 
-  # mattn/go-sqlite3, marcboeker/go-duckdb, and asg017/sqlite-vec-go-bindings
-  # all link C code. buildGoModule defaults CGO_ENABLED to 1, but be explicit.
+  # mattn/go-sqlite3 and sqlite-vec both link C code. buildGoModule defaults
+  # CGO_ENABLED to 1, but be explicit.
   env.CGO_ENABLED = 1;
 
   # sqlite-vec-go-bindings does `#include "sqlite3.h"` but ships no sqlite

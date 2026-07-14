@@ -102,14 +102,6 @@ jobs:
       # sqlite-vec's CGo bindings #include <sqlite3.h>, which isn't on
       # the default windows-latest include path. Install it from MSYS2
       # (already present on the runner) and point CGO_CFLAGS at it.
-      #
-      # arrow-go/v18's cdata helpers.h declares its helpers as plain
-      # `inline` (not `static inline`). Under C99 that requires exactly
-      # one external definition somewhere, and no TU in arrow-go
-      # provides one. -fgnu89-inline forces every TU to emit the
-      # external copy, and --allow-multiple-definition lets MinGW's ld
-      # pick the first and continue instead of erroring on the
-      # duplicates that flag produces.
       - name: Install sqlite3 dev headers
         shell: pwsh
         run: |
@@ -119,16 +111,14 @@ jobs:
         shell: pwsh
         env:
           CGO_ENABLED: "1"
-          CGO_CFLAGS: "-IC:/msys64/mingw64/include -fgnu89-inline"
-          CGO_LDFLAGS: "-Wl,--allow-multiple-definition"
+          CGO_CFLAGS: "-IC:/msys64/mingw64/include"
         run: go build -tags "fts5 sqlite_vec" -o msgvault.exe ./cmd/msgvault
 
       - name: Test
         shell: pwsh
         env:
           CGO_ENABLED: "1"
-          CGO_CFLAGS: "-IC:/msys64/mingw64/include -fgnu89-inline"
-          CGO_LDFLAGS: "-Wl,--allow-multiple-definition"
+          CGO_CFLAGS: "-IC:/msys64/mingw64/include"
         run: go test -tags "fts5 sqlite_vec" ./...
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

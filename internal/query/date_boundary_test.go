@@ -59,7 +59,7 @@ func TestDateBoundary_StoreAPIMatchesEngine(t *testing.T) {
 	})
 	require.NoError(err, "UpsertMessage")
 
-	eng := query.NewEngine(st.DB(), st.IsPostgreSQL())
+	eng := query.NewSQLiteEngine(st.DB())
 
 	// storeHas runs the store-API search with the given after/before bounds
 	// and reports whether the midnight message is included.

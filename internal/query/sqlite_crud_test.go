@@ -384,30 +384,6 @@ func TestListMessagesFromNameUsesPerMessageDisplayName(t *testing.T) {
 	assert.Equal(email, got.FromEmail, "FromEmail still from the participant")
 }
 
-// TestGetTextStatsSourceDeletedBreakdown verifies GetTextStats populates the
-// active/source-deleted breakdown alongside the total message count, so
-// /api/v1/text/stats reports non-zero breakdown fields.
-func TestGetTextStatsSourceDeletedBreakdown(t *testing.T) {
-	assert := assert.New(t)
-	env := newTestEnv(t)
-
-	// Seed three text-type (SMS) messages; mark one deleted from its source.
-	env.AddMessage(dbtest.MessageOpts{Subject: "sms one", MessageType: "sms", SizeEstimate: 100})
-	env.AddMessage(dbtest.MessageOpts{Subject: "sms two", MessageType: "sms", SizeEstimate: 100})
-	deletedID := env.AddMessage(dbtest.MessageOpts{Subject: "sms three", MessageType: "sms", SizeEstimate: 100})
-	env.MarkDeletedBySourceID(fmt.Sprintf("msg%d", deletedID))
-
-	// A dedup-hidden row (deleted_at IS NOT NULL) must be excluded from
-	// every breakdown, matching the other read paths.
-	dedupID := env.AddMessage(dbtest.MessageOpts{Subject: "sms dup", MessageType: "sms", SizeEstimate: 100})
-	env.MarkDedupLoserByID(dedupID)
-
-	stats := env.MustGetTextStats(TextStatsOptions{})
-	assert.Equal(int64(3), stats.MessageCount, "MessageCount excludes dedup-hidden, includes source-deleted")
-	assert.Equal(int64(2), stats.ActiveMessageCount, "ActiveMessageCount")
-	assert.Equal(int64(1), stats.SourceDeletedMessageCount, "SourceDeletedMessageCount")
-}
-
 func TestGetTotalStatsWithSourceID(t *testing.T) {
 	assert := assert.New(t)
 	env := newTestEnv(t)

@@ -43,7 +43,7 @@ Backup snapshots exclude config and OAuth tokens by default. including them requ
 
 ### native dependencies
 
-The current build uses CGO for SQLite and, while the analytics carve is in progress, DuckDB. native dependencies increase supply-chain and memory-safety exposure compared with pure Go. versions are pinned in `go.mod`; dependency updates should be reviewed and tested.
+The current build uses CGO for SQLite. native dependencies increase supply-chain and memory-safety exposure compared with pure Go. versions are pinned in `go.mod`; dependency updates should be reviewed and tested.
 
 ## safe reports
 

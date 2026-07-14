@@ -15,18 +15,7 @@ import (
 	"go.kenn.io/msgvault/internal/store"
 )
 
-// Analytics dataset names. Each is both the Parquet subdirectory under
-// analyticsDir and the view/probe key for that dataset's optional columns.
-const (
-	datasetMessages      = "messages"
-	datasetParticipants  = "participants"
-	datasetConversations = "conversations"
-	messageTypeEmail     = "email"
-)
-
-// emailOnlyFilterMsg is the SQL condition restricting to email messages with "msg." alias (DuckDB).
-// NULL and empty string handle old data where message_type was not yet populated.
-const emailOnlyFilterMsg = "(msg.message_type = '" + messageTypeEmail + "' OR msg.message_type IS NULL OR msg.message_type = '')"
+const messageTypeEmail = "email"
 
 // emailOnlyFilterM is the SQL condition restricting to email messages with "m." alias (SQLite).
 // NULL and empty string handle old data where message_type was not yet populated.
@@ -38,8 +27,7 @@ const emailOnlyFilterM = "(m.message_type = '" + messageTypeEmail + "' OR m.mess
 // (typically iMessage/SMS handles imported without a matching contacts entry)
 // surface under their phone number instead of vanishing because email_address
 // is NULL. alias is the participants-table alias (e.g. "p", "p_filter_to").
-// Works for both SQLite (nullable phone_number) and DuckDB-over-Parquet
-// (phone_number coerced to empty string at export); NULLIF squashes both forms.
+// NULLIF handles both NULL and empty phone numbers.
 func participantNameExpr(alias string) string {
 	return fmt.Sprintf(
 		"COALESCE(NULLIF(TRIM(%s.display_name), ''), NULLIF(%s.phone_number, ''), %s.email_address)",
@@ -81,9 +69,8 @@ const sqliteSenderJoin = `LEFT JOIN message_recipients mr_from ON mr_from.id = (
 		LEFT JOIN participants p_sender ON p_sender.id = COALESCE(mr_from.participant_id, m.sender_id)`
 
 // rebindFunc converts a query written with ? placeholders into the
-// driver-native form. Helpers in this file accept it explicitly so the
-// PostgreSQL path (pgx/v5/stdlib needs $1, $2, …) and the SQLite/DuckDB
-// path (both accept ?) share a single implementation. Pass
+// driver-native form. Helpers in this file accept it explicitly so PostgreSQL
+// ($1, $2, …) and SQLite (?) can share one implementation. Pass
 // noopRebind when the underlying driver accepts ? natively.
 type rebindFunc func(string) string
 

@@ -70,7 +70,7 @@ func TestPaginationStability_IdenticalSentAt(t *testing.T) {
 	const n = paginationStabilityN
 	const subjectTag = paginationStabilitySubjectTag
 
-	eng := query.NewEngine(st.DB(), st.IsPostgreSQL())
+	eng := query.NewSQLiteEngine(st.DB())
 	ctx := context.Background()
 
 	// (1) ListMessages — assert determinism for every sort field. The

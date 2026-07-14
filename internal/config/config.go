@@ -19,10 +19,6 @@ import (
 )
 
 const (
-	AnalyticsEngineAuto   = "auto"
-	AnalyticsEngineSQL    = "sql"
-	AnalyticsEngineDuckDB = "duckdb"
-
 	DaemonAutoRestartNewer  = "newer"
 	DaemonAutoRestartNever  = "never"
 	DaemonAutoRestartAlways = "always"
@@ -33,32 +29,6 @@ type ChatConfig struct {
 	Server     string `toml:"server"`      // Ollama server URL
 	Model      string `toml:"model"`       // Model name
 	MaxResults int    `toml:"max_results"` // Top-K messages to retrieve
-}
-
-// AnalyticsConfig controls daemon-side analytics engine selection.
-type AnalyticsConfig struct {
-	Engine         string `toml:"engine"`           // auto, sql, or duckdb
-	AutoBuildCache bool   `toml:"auto_build_cache"` // Build stale/missing Parquet cache before using DuckDB
-}
-
-func (a *AnalyticsConfig) ApplyDefaults() {
-	a.Engine = strings.ToLower(strings.TrimSpace(a.Engine))
-	if a.Engine == "" {
-		a.Engine = AnalyticsEngineAuto
-	}
-}
-
-func (a *AnalyticsConfig) Validate() error {
-	switch a.Engine {
-	case AnalyticsEngineAuto, AnalyticsEngineSQL, AnalyticsEngineDuckDB:
-		return nil
-	default:
-		return fmt.Errorf("invalid [analytics] engine %q (want %q, %q, or %q)",
-			a.Engine,
-			AnalyticsEngineAuto,
-			AnalyticsEngineSQL,
-			AnalyticsEngineDuckDB)
-	}
 }
 
 // ServerConfig holds HTTP API server configuration.
@@ -182,7 +152,6 @@ type Config struct {
 	Sync        SyncConfig        `toml:"sync"`
 	Chat        ChatConfig        `toml:"chat"`
 	Server      ServerConfig      `toml:"server"`
-	Analytics   AnalyticsConfig   `toml:"analytics"`
 	Remote      RemoteConfig      `toml:"remote"`
 	Vector      vector.Config     `toml:"vector"`
 	Identity    IdentityConfig    `toml:"identity"`
@@ -353,10 +322,6 @@ func NewDefaultConfig() *Config {
 			DaemonIdleTimeout: 20 * time.Minute,
 			DaemonAutoRestart: DaemonAutoRestartNewer,
 		},
-		Analytics: AnalyticsConfig{
-			Engine:         AnalyticsEngineAuto,
-			AutoBuildCache: true,
-		},
 		Accounts:    []AccountSchedule{},
 		SynctechSMS: SynctechSMSConfig{Sources: []SynctechSMSSource{}},
 		GCal:        []GCalSource{},
@@ -459,10 +424,6 @@ func Load(path, homeDir string) (*Config, error) {
 	if err := cfg.Server.Validate(); err != nil {
 		return nil, err
 	}
-	cfg.Analytics.ApplyDefaults()
-	if err := cfg.Analytics.Validate(); err != nil {
-		return nil, err
-	}
 	if err := cfg.Backup.Validate(); err != nil {
 		return nil, err
 	}
@@ -550,11 +511,6 @@ func (c *Config) AttachmentsDir() string {
 // TokensDir returns the path to the OAuth tokens directory.
 func (c *Config) TokensDir() string {
 	return filepath.Join(c.Data.DataDir, "tokens")
-}
-
-// AnalyticsDir returns the path to the Parquet analytics directory.
-func (c *Config) AnalyticsDir() string {
-	return filepath.Join(c.Data.DataDir, "analytics")
 }
 
 // LogsDir returns the path to the logs directory. Uses [log].dir

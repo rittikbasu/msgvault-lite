@@ -76,9 +76,7 @@ func isSQLiteError(err error, substr string) bool {
 	return false
 }
 
-// IsPostgresURL returns true if the path looks like a PostgreSQL connection URL.
-// Exported so cmd-side helpers can decide whether to skip SQLite-only code
-// paths (e.g., the Parquet analytics cache) without first opening a Store.
+// IsPostgresURL reports whether dbPath is a PostgreSQL connection URL.
 func IsPostgresURL(dbPath string) bool {
 	return strings.HasPrefix(dbPath, "postgresql://") || strings.HasPrefix(dbPath, "postgres://")
 }
@@ -365,11 +363,7 @@ func (s *Store) CheckpointWAL() error {
 	return s.dialect.CheckpointWAL(s.db.DB)
 }
 
-// DB returns the underlying *sql.DB for consumers that need to
-// pass the raw handle elsewhere (e.g. the DuckDB engine's
-// sqlite_scan wrapper). The wrapper's structured-logging
-// behaviour is bypassed for those consumers — they're operating
-// at a different abstraction layer.
+// DB returns the underlying *sql.DB.
 func (s *Store) DB() *sql.DB {
 	return s.db.DB
 }

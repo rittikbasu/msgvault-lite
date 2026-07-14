@@ -1,7 +1,4 @@
-// Package query provides a reusable query layer for msgvault.
-// It supports aggregation queries for TUI views and message retrieval for detail views.
-// The package is designed with a backend-agnostic interface to support both
-// SQLite (for flexibility) and Parquet (for performance) data sources.
+// Package query provides SQLite-backed message retrieval and search for msgvault.
 package query
 
 import (

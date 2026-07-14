@@ -10,17 +10,11 @@ const (
 	sourceTypeCalendar = "gcal"
 )
 
-// Analytics dataset / SQLite table names: the Parquet subdirectory under
-// analytics/, the source table in build-cache and repair-encoding queries,
-// and the entity label in stats output. JSON response fields and CLI flag
-// names that happen to share these strings use their own literals/constants,
-// so renaming a storage entity cannot silently change an external contract.
+// SQLite table names used as structured log keys.
 const (
-	tableMessages      = "messages"
-	tableLabels        = "labels"
-	tableAttachments   = "attachments"
-	tableParticipants  = "participants"
-	tableConversations = "conversations"
+	tableMessages    = "messages"
+	tableLabels      = "labels"
+	tableAttachments = "attachments"
 )
 
 // flagJSON is the name of the boolean --json output flag. It is kept distinct

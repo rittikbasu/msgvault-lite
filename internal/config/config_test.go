@@ -26,13 +26,6 @@ func TestServerConfigDefaults(t *testing.T) {
 	assert.Empty(t, cfg.Server.APIKey)
 }
 
-func TestAnalyticsConfigDefaults(t *testing.T) {
-	cfg := NewDefaultConfig()
-
-	assert.Equal(t, AnalyticsEngineAuto, cfg.Analytics.Engine)
-	assert.True(t, cfg.Analytics.AutoBuildCache)
-}
-
 func TestAccountScheduleEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("MSGVAULT_HOME", tmpDir)
@@ -44,6 +37,19 @@ func TestAccountScheduleEmpty(t *testing.T) {
 
 	scheduled := cfg.ScheduledAccounts()
 	assert.Empty(t, scheduled)
+}
+
+func TestLoadIgnoresRetiredAnalyticsConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+[analytics]
+engine = "duckdb"
+auto_build_cache = true
+`), 0o644), "WriteFile()")
+
+	_, err := Load(configPath, "")
+	require.NoError(t, err, "retired analytics keys should remain compatible")
 }
 
 func TestLoadWithServerConfig(t *testing.T) {
@@ -139,46 +145,6 @@ daemon_auto_restart = "sometimes"
 
 	require.Error(t, err, "Load()")
 	assert.Contains(t, err.Error(), "invalid [server] daemon_auto_restart")
-}
-
-func TestLoadWithAnalyticsConfig(t *testing.T) {
-	assert := assert.
-		New(t)
-	require :=
-		require.New(t)
-
-	tmpDir := t.TempDir()
-
-	configContent := `
-[analytics]
-engine = "SQL"
-auto_build_cache = false
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(
-		os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile()")
-
-	cfg, err := Load(configPath, "")
-	require.NoError(
-		err, "Load()")
-
-	assert.Equal(AnalyticsEngineSQL, cfg.Analytics.Engine)
-	assert.False(cfg.Analytics.AutoBuildCache)
-}
-
-func TestLoadWithInvalidAnalyticsEngine(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	configContent := `
-[analytics]
-engine = "sqlite"
-`
-	configPath := filepath.Join(tmpDir, "config.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644), "WriteFile()")
-
-	_, err := Load(configPath, "")
-	require.Error(t, err, "Load()")
-	assert.Contains(t, err.Error(), "invalid [analytics] engine")
 }
 
 func TestServerDaemonIdleTimeoutDefaultAndZero(t *testing.T) {

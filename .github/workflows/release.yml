@@ -64,8 +64,7 @@ jobs:
           file dist/msgvault
           ldd dist/msgvault || true
 
-          # Verify runtime version requirements are reasonable. DuckDB's
-          # prebuilt static library still links against libstdc++ symbols.
+          # Verify runtime version requirements are reasonable.
           echo "--- Runtime requirements ---"
           objdump -T dist/msgvault 2>/dev/null | grep -oP 'GLIBC_\d+\.\d+' | sort -uV | tail -1 || true
           objdump -T dist/msgvault 2>/dev/null | grep -oP 'GLIBCXX_\d+\.\d+(\.\d+)?' | sort -uV | tail -1 || true
@@ -159,9 +158,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # sqlite-vec's CGo bindings need sqlite3.h at compile time and
-      # arrow-go/v18's cdata helpers need GNU89 inline semantics on
-      # MinGW; see .github/workflows/ci.yml for details.
+      # sqlite-vec's CGo bindings need sqlite3.h at compile time.
       - name: Install sqlite3 dev headers
         shell: pwsh
         run: |
@@ -172,8 +169,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '1'
-          CGO_CFLAGS: "-IC:/msys64/mingw64/include -fgnu89-inline"
-          CGO_LDFLAGS: "-Wl,--allow-multiple-definition"
+          CGO_CFLAGS: "-IC:/msys64/mingw64/include"
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
 

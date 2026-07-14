@@ -1136,8 +1136,8 @@ func TestFullSync_Latin1InFromName(t *testing.T) {
 	assertSummary(t, summary, WantSummary{Added: new(int64(1)), Errors: new(int64(0))})
 
 	// Verify the participant display_name in the participants table is valid UTF-8.
-	// Before the fix, raw Latin-1 bytes would be stored as-is, causing DuckDB errors
-	// when exporting to Parquet.
+	// Before the fix, raw Latin-1 bytes would be stored as-is and break
+	// downstream UTF-8 readers.
 	displayName, err := env.Store.InspectParticipantDisplayName("sender@example.com")
 	require.NoError(err, "InspectParticipantDisplayName")
 	// EnsureUTF8 should convert the Latin-1 \xC9 to the UTF-8 É (U+00C9)

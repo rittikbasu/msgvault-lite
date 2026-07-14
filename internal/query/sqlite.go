@@ -575,9 +575,8 @@ func (e *SQLiteEngine) buildFilterJoinsAndConditions(filter MessageFilter, table
 func (e *SQLiteEngine) SubAggregate(ctx context.Context, filter MessageFilter, groupBy ViewType, opts AggregateOptions) ([]AggregateRow, error) {
 	// Reconcile opts.HideDeletedFromSource into filter so the helper
 	// inside buildFilterJoinsAndConditions / optsToFilterConditions
-	// sees the OR of both fields. Mirrors the DuckDB SubAggregate
-	// path so both engines emit one authoritative live-message
-	// predicate per query.
+	// sees the OR of both fields and emits one authoritative
+	// live-message predicate instead of stacking contradictory clauses.
 	if opts.HideDeletedFromSource {
 		filter.HideDeletedFromSource = true
 	}

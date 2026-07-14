@@ -95,7 +95,7 @@ func runSearch(cmd *cobra.Command, queryStr string) error {
 		cmd.Context(), parsed, fetchLimit, searchOffset,
 	)
 	if err != nil {
-		return query.HintRepairEncoding(fmt.Errorf("search: %w", err))
+		return fmt.Errorf("search: %w", err)
 	}
 
 	if searchJSON {

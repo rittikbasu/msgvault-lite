@@ -96,20 +96,6 @@ type Dialect interface {
 	// (e.g., PostgreSQL includes tsvector in its main schema).
 	SchemaFTS() string
 
-	// FTSRebuildSchema tears down and recreates the FTS infrastructure from
-	// scratch — the caller is expected to follow up with a full backfill.
-	// Used to recover from malformed FTS shadow-table state that in-place
-	// rebuild operations (e.g., SQLite's rebuild pragma) cannot clear.
-	// SQLite: DROP TABLE IF EXISTS messages_fts + re-execute schema_sqlite.sql.
-	// PostgreSQL: DROP INDEX + full-table search_fts = NULL + recreate GIN.
-	//
-	// Takes a querier (not *sql.DB) so RebuildFTS can run it on the
-	// maintenance transaction whose statement_timeout has been disabled — the
-	// PG path includes a full-table tsvector clear (same cost as FTSClearSQL)
-	// plus a GIN rebuild over a populated table, both of which can exceed the
-	// pool-wide 30s timeout on a large archive (finding S1).
-	FTSRebuildSchema(q querier) error
-
 	// DatabaseSize returns the on-disk or logical size of the database in
 	// bytes. For SQLite: file size at dbPath. For PostgreSQL: queries
 	// pg_database_size(). Returns 0 if the size cannot be determined;

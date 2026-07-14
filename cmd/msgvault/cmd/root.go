@@ -70,7 +70,7 @@ single binary.`,
 
 		// Skip config loading (and therefore logging setup) for
 		// commands that must run without touching disk or config.
-		if cmd.Name() == "version" || cmd.Name() == "completion" ||
+		if cmd.Name() == "version" || cmd.Name() == "completion" || cmd.Name() == "help" ||
 			cmd.Name() == cobra.ShellCompRequestCmd ||
 			cmd.Name() == cobra.ShellCompNoDescRequestCmd {
 			cmd.SilenceUsage = false

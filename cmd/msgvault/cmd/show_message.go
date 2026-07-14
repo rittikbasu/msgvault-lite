@@ -19,9 +19,8 @@ var (
 )
 
 var showMessageCmd = &cobra.Command{
-	Use:     "show <id>",
-	Aliases: []string{"show-message"},
-	Short:   "Show full message details",
+	Use:   "show <id>",
+	Short: "Show full message details",
 	Long: `Show the complete details of a local message by its internal ID or Gmail ID.
 
 This command displays the full message including headers, body, labels,

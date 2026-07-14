@@ -23,11 +23,17 @@ func TestRetainLiteCommandsRemovesLegacySurface(t *testing.T) {
 	assert.ElementsMatch(t, []string{"backup", "messages", "search", "show", "status", "sync"}, names)
 }
 
-func TestLiteCommandCanonicalNamesKeepLegacyAliases(t *testing.T) {
+func TestLiteCommandCanonicalNamesRejectLegacyAliases(t *testing.T) {
 	assert.Equal(t, "status", statsCmd.Name())
-	assert.Contains(t, statsCmd.Aliases, "stats")
+	assert.Empty(t, statsCmd.Aliases)
 	assert.Equal(t, "show", showMessageCmd.Name())
-	assert.Contains(t, showMessageCmd.Aliases, "show-message")
+	assert.Empty(t, showMessageCmd.Aliases)
+
+	for _, alias := range []string{"stats", "show-message"} {
+		_, _, err := rootCmd.Find([]string{alias})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unknown command")
+	}
 }
 
 func TestSyncIncrementalAliasIsRejected(t *testing.T) {

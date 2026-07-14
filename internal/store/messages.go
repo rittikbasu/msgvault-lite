@@ -972,10 +972,7 @@ func (s *Store) UpsertFTS(messageID int64, subject, bodyText, fromAddr, toAddrs,
 // independently so partial progress is preserved if interrupted.
 // Returns the number of rows inserted. No-op if FTS5 is not available.
 //
-// BackfillFTS clears FTS rows with DELETE before inserting. If the FTS5
-// shadow tables are themselves malformed, that DELETE will either fail or
-// leave corruption in place — callers recovering from shadow-table
-// corruption should use RebuildFTS instead.
+// BackfillFTS clears FTS rows with DELETE before inserting.
 func (s *Store) BackfillFTS(progress func(done, total int64)) (int64, error) {
 	if !s.fts5Available {
 		return 0, nil
@@ -1000,45 +997,6 @@ func (s *Store) BackfillFTS(progress func(done, total int64)) (int64, error) {
 	return s.backfillFTSRange(minID, maxID, progress)
 }
 
-// RebuildFTS fully recreates the FTS index from the underlying message
-// tables. Unlike BackfillFTS (DELETE + INSERT), this drops and recreates
-// the FTS table itself so malformed FTS5 shadow tables are fully replaced.
-//
-// Ignores the cached fts5Available flag: a corrupt shadow table causes the
-// availability probe to fail, which is precisely the symptom this method
-// exists to recover from. On successful completion, fts5Available is set to
-// true. Returns an error if the binary was built without FTS5 support.
-func (s *Store) RebuildFTS(progress func(done, total int64)) (int64, error) {
-	// runMaintenance disables the pool-wide 30s statement_timeout for the
-	// schema teardown/rebuild. On PG, FTSRebuildSchema runs a full-table
-	// `UPDATE messages SET search_fts = NULL` (identical cost to the hatched
-	// FTSClearSQL) plus a GIN rebuild over a populated table — both can exceed
-	// 30s on a large archive and would cancel the rebuild-fts recovery command
-	// with SQLSTATE 57014 (finding S1). On SQLite the reset SQL is "" so this
-	// is an ordinary transaction around the DROP/CREATE of messages_fts.
-	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-		return s.dialect.FTSRebuildSchema(tx)
-	}); err != nil {
-		return 0, err
-	}
-
-	minID, maxID, err := s.messageIDRange()
-	if err != nil {
-		return 0, err
-	}
-	if maxID == 0 {
-		s.fts5Available = true
-		return 0, nil
-	}
-
-	indexed, err := s.backfillFTSRange(minID, maxID, progress)
-	if err != nil {
-		return indexed, err
-	}
-	s.fts5Available = true
-	return indexed, nil
-}
-
 // messageIDRange returns (minID, maxID) using MIN/MAX B-tree lookups
 // rather than COUNT(*), which would scan the whole table.
 func (s *Store) messageIDRange() (int64, int64, error) {
@@ -1052,10 +1010,9 @@ func (s *Store) messageIDRange() (int64, int64, error) {
 	return minID, maxID, nil
 }
 
-// backfillFTSRange inserts FTS rows for all messages with id in [minID, maxID],
-// in batches. Shared between BackfillFTS (DELETE+fill) and RebuildFTS
-// (DROP+CREATE+fill). Each batch is committed independently so partial
-// progress is preserved if interrupted.
+// backfillFTSRange inserts FTS rows for all messages with id in [minID, maxID]
+// in batches. Each batch is committed independently so partial progress is
+// preserved if interrupted.
 func (s *Store) backfillFTSRange(minID, maxID int64, progress func(done, total int64)) (int64, error) {
 	const batchSize = 5000
 	idRange := maxID - minID + 1

@@ -203,34 +203,6 @@ func (d *SQLiteDialect) SchemaFTS() string {
 	return "schema_sqlite.sql"
 }
 
-// FTSRebuildSchema drops and recreates the messages_fts virtual table. The
-// DROP pathway discards FTS5 shadow tables in their entirety, which is the
-// only reliable fix when those shadow tables are malformed — the `rebuild`
-// pragma reads from them and `delete-all` is rejected on contentful tables.
-//
-// Runs on the querier so RebuildFTS can route it through the maintenance
-// transaction (finding S1). SQLite DDL is transactional, so DROP/CREATE of
-// the virtual table run fine inside the tx runMaintenance opens; SQLite has
-// no statement_timeout, so the hatch is a plain transaction here.
-func (d *SQLiteDialect) FTSRebuildSchema(q querier) error {
-	if _, err := q.Exec("DROP TABLE IF EXISTS messages_fts"); err != nil {
-		return fmt.Errorf("drop messages_fts: %w", err)
-	}
-	schema, err := schemaFS.ReadFile("schema_sqlite.sql")
-	if err != nil {
-		return fmt.Errorf("read schema_sqlite.sql: %w", err)
-	}
-	if _, err := q.Exec(string(schema)); err != nil {
-		if d.IsNoSuchModuleError(err) {
-			return errors.New("cannot rebuild FTS: this msgvault binary was built without " +
-				"FTS5 support (rebuild with `-tags fts5`)",
-			)
-		}
-		return fmt.Errorf("create messages_fts: %w", err)
-	}
-	return nil
-}
-
 // DatabaseSize returns the on-disk size of the SQLite database file.
 // Returns (0, nil) for in-memory databases or when the file cannot be stat'd.
 func (d *SQLiteDialect) DatabaseSize(_ *sql.DB, dbPath string) (int64, error) {

@@ -11,12 +11,11 @@ import (
 var statsJSON bool
 
 var statsCmd = &cobra.Command{
-	Use:     "status",
-	Aliases: []string{"stats"},
-	Short:   "Show local archive status",
-	Long:    `Show statistics about the local email archive.`,
-	Args:    cobra.NoArgs,
-	RunE:    runStats,
+	Use:   "status",
+	Short: "Show local archive status",
+	Long:  `Show statistics about the local email archive.`,
+	Args:  cobra.NoArgs,
+	RunE:  runStats,
 }
 
 func runStats(cmd *cobra.Command, _ []string) error {

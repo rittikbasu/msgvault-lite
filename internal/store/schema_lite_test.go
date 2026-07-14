@@ -17,6 +17,8 @@ func TestFreshArchiveUsesForkNativeSchema(t *testing.T) {
 	assert.Equal(1, schemaVersion, "fork schema version")
 
 	for _, table := range []string{
+		"account_identities",
+		"applied_migrations",
 		"participant_identifiers",
 		"conversation_participants",
 		"reactions",
@@ -32,7 +34,7 @@ func TestFreshArchiveUsesForkNativeSchema(t *testing.T) {
 		assert.Zero(count, "retired table %s", table)
 	}
 
-	for _, column := range []string{"embed_gen", "last_modified"} {
+	for _, column := range []string{"embed_gen", "last_modified", "deleted_at", "delete_batch_id"} {
 		var count int
 		require.NoError(t, f.DB().QueryRow(
 			`SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = ?`, column,

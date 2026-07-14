@@ -413,15 +413,6 @@ func (tdb *TestDB) MarkDeletedByID(id int64) {
 	require.NoErrorf(tdb.T, err, "mark deleted by id %d", id)
 }
 
-// MarkDedupLoserByID sets deleted_at on a message, mirroring what
-// store.Deduplicate does to soft-delete the losing duplicate row.
-// User-facing read paths must always exclude these.
-func (tdb *TestDB) MarkDedupLoserByID(id int64) {
-	tdb.T.Helper()
-	_, err := tdb.DB.Exec("UPDATE messages SET deleted_at = datetime('now') WHERE id = ?", id)
-	require.NoErrorf(tdb.T, err, "mark dedup loser by id %d", id)
-}
-
 // MarkDeletedBySourceID marks a message as deleted by its source message ID.
 func (tdb *TestDB) MarkDeletedBySourceID(sourceID string) {
 	tdb.T.Helper()

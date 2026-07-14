@@ -45,11 +45,11 @@ func archiveOwnedError(dataDir string) error {
 	)
 }
 
-// openStoreAndInitWith opens the local archive and initializes schema while the
+// openStoreAndInit opens the local archive and initializes schema while the
 // caller owns the direct-writer lock. store.Open + InitSchema create the
 // database file on the first write command, which is the right behavior for a
 // freshly installed CLI.
-func openStoreAndInitWith(migrate func(*store.Store) error) (*store.Store, error) {
+func openStoreAndInit() (*store.Store, error) {
 	dbPath := cfg.DatabasePath()
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -59,28 +59,24 @@ func openStoreAndInitWith(migrate func(*store.Store) error) (*store.Store, error
 		_ = st.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	if err := migrate(st); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("startup migrations: %w", err)
-	}
 	return st, nil
 }
 
 func openWritableStoreAndInit() (*store.Store, func(), error) {
-	return openWritableStoreAndInitWith(runStartupMigrations)
+	return openWritableStoreAndInitLocked()
 }
 
 func openWritableStoreAndInitForIngest() (*store.Store, func(), error) {
-	return openWritableStoreAndInitWith(runStartupMigrationsForIngest)
+	return openWritableStoreAndInitLocked()
 }
 
-func openWritableStoreAndInitWith(migrate func(*store.Store) error) (*store.Store, func(), error) {
+func openWritableStoreAndInitLocked() (*store.Store, func(), error) {
 	release, err := acquireDirectSQLiteWriteLock(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	st, err := openStoreAndInitWith(migrate)
+	st, err := openStoreAndInit()
 	if err != nil {
 		release()
 		return nil, nil, err

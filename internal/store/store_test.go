@@ -877,20 +877,6 @@ func TestStore_GetStats_WithData(t *testing.T) {
 	assert.NotZero(t, stats.ThreadCount, "ThreadCount should be non-zero")
 }
 
-func TestStore_GetStats_ExcludesDedupHidden(t *testing.T) {
-	f := storetest.New(t)
-	ids := f.CreateMessages(3)
-
-	// Soft-delete one via dedup (deleted_at).
-	_, err := f.Store.DB().Exec(
-		f.Store.Rebind("UPDATE messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?"), ids[0])
-	require.NoError(t, err, "set deleted_at")
-
-	stats, err := f.Store.GetStats()
-	require.NoError(t, err, "GetStats()")
-	assert.Equal(t, int64(2), stats.MessageCount, "MessageCount (dedup-hidden row excluded)")
-}
-
 func TestStore_GetStats_ExcludesSourceDeleted(t *testing.T) {
 	f := storetest.New(t)
 	ids := f.CreateMessages(3)
@@ -1616,31 +1602,6 @@ func TestStore_GetStatsForScope_SingleSource(t *testing.T) {
 	require.NoError(err, "GetStatsForScope nil")
 	assert.Equal(int64(5), statsAll.MessageCount, "MessageCount (nil/global)")
 	assert.Equal(int64(2), statsAll.SourceCount, "SourceCount (nil/global)")
-}
-
-func TestStore_GetStatsForScope_ExcludesDedupHidden(t *testing.T) {
-	require := require.New(t)
-	assert := assert.New(t)
-	f := storetest.New(t)
-	srcB, convB := makeSecondSource(t, f, "b-dedup@example.com")
-
-	idsA := createMessagesForSource(t, f.Store, f.Source.ID, f.ConvID, "a-dedup", 2)
-	createMessagesForSource(t, f.Store, srcB.ID, convB, "b-dedup", 1)
-
-	// Soft-delete one message in source A via dedup (deleted_at).
-	_, err := f.Store.DB().Exec(
-		f.Store.Rebind("UPDATE messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?"), idsA[0])
-	require.NoError(err, "set deleted_at")
-
-	// Scoped to A: should see only the live message.
-	statsA, err := f.Store.GetStatsForScope([]int64{f.Source.ID})
-	require.NoError(err, "GetStatsForScope A")
-	assert.Equal(int64(1), statsA.MessageCount, "MessageCount (A scoped, dedup-hidden excluded)")
-
-	// Unscoped: should also exclude the dedup-hidden message (2 live, not 3).
-	statsAll, err := f.Store.GetStatsForScope(nil)
-	require.NoError(err, "GetStatsForScope nil")
-	assert.Equal(int64(2), statsAll.MessageCount, "MessageCount (nil/global, dedup-hidden excluded)")
 }
 
 func TestStore_GetStatsForScope_ExcludesSourceDeleted(t *testing.T) {

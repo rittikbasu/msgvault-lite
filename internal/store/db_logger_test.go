@@ -482,7 +482,7 @@ func TestNormalizeStmt_KeepsWhereClause(t *testing.T) {
 		"ml WHERE ml.message_id = m.id) AS label_count, " +
 		"COALESCE(m.is_from_me, 0) AS is_from_me " +
 		"FROM messages m JOIN sources s ON s.id = m.source_id " +
-		"WHERE m.rfc822_message_id = ? AND m.deleted_at IS NULL"
+		"WHERE m.rfc822_message_id = ? AND m.deleted_from_source_at IS NULL"
 	got := normalizeStmt(in, 300)
 	assert.Contains(t, got, "WHERE m.rfc822_message_id",
 		"WHERE clause missing from truncated stmt")

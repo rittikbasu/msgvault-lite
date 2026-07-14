@@ -121,10 +121,8 @@ CREATE TABLE IF NOT EXISTS messages (
     has_attachments BOOLEAN DEFAULT FALSE,
     attachment_count INTEGER DEFAULT 0,
 
-    -- Soft delete tracking
-    deleted_at DATETIME,
+    -- Remote deletion tombstone
     deleted_from_source_at DATETIME,
-    delete_batch_id TEXT,
 
     -- Archival info
     archived_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -317,8 +315,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(source_id, deleted_f
 CREATE INDEX IF NOT EXISTS idx_messages_source_message_id ON messages(source_message_id);
 
 -- Message IDs are durable archive cursors. Physical deletion could let SQLite
--- reuse the current maximum ROWID, so source deletions and local hiding must be
--- represented by deleted_from_source_at/deleted_at tombstones instead.
+-- reuse the current maximum ROWID, so remote deletions are represented by
+-- deleted_from_source_at tombstones instead.
 CREATE TRIGGER IF NOT EXISTS messages_reject_delete
 BEFORE DELETE ON messages
 BEGIN
@@ -332,6 +330,9 @@ CREATE INDEX IF NOT EXISTS idx_message_recipients_participant ON message_recipie
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_msg_content_hash
+    ON attachments(message_id, content_hash)
+    WHERE content_hash IS NOT NULL AND content_hash != '';
 CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(content_hash);
 CREATE INDEX IF NOT EXISTS idx_attachments_storage_path ON attachments(storage_path);
 -- The partial unique index on (message_id, content_hash) for
@@ -350,32 +351,5 @@ CREATE INDEX IF NOT EXISTS idx_sync_run_items_run_status
 -- ============================================================================
 -- ACCOUNT IDENTITIES
 -- ============================================================================
-
--- Confirmed per-account "me" identities used by sent-message detection
--- in dedup. Identity is account-scoped: an address confirmed for one
--- source does not imply it is "me" in any other source.
-CREATE TABLE IF NOT EXISTS account_identities (
-    source_id    INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    address      TEXT NOT NULL,             -- case-preserved
-    source_signal TEXT NOT NULL DEFAULT '', -- sorted comma-separated signal set, e.g. 'manual' or 'account-identifier,manual'
-    confirmed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (source_id, address)
-);
-
-CREATE INDEX IF NOT EXISTS idx_account_identities_address
-    ON account_identities(address);
-
--- ============================================================================
--- APPLIED MIGRATIONS
--- ============================================================================
-
--- Marks one-time data migrations that have already run. Schema DDL is
--- idempotent via IF NOT EXISTS; this table is for *data* migrations
--- (e.g. moving legacy config into per-account records) that must run
--- exactly once.
-CREATE TABLE IF NOT EXISTS applied_migrations (
-    name        TEXT PRIMARY KEY,
-    applied_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
 PRAGMA user_version = 1;

@@ -12,11 +12,10 @@ import (
 )
 
 var (
-	headless                    bool
-	accountDisplayName          string
-	forceReauth                 bool
-	oauthAppName                string
-	noDefaultIdentityAddAccount bool
+	headless           bool
+	accountDisplayName string
+	forceReauth        bool
+	oauthAppName       string
 )
 
 // addAccountUse is the usage string for the add-account command.
@@ -293,18 +292,6 @@ func runAddAccountLocal(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("set display name: %w", err)
 			}
 		}
-		// Auto-default-identity must run BEFORE the legacy migration
-		// retry (runPostSourceCreateMigrations). The migration's
-		// set-semantics merge handles the case where the legacy
-		// [identity] block contains the same address. Reverse order
-		// would leave the source without its own account identifier
-		// because confirmDefaultIdentity skips on any existing rows.
-		if !noDefaultIdentityAddAccount {
-			confirmDefaultIdentity(cmd.OutOrStdout(), s, source.ID, email, email, "account-identifier")
-		}
-		if err := runPostSourceCreateMigrations(s); err != nil {
-			return fmt.Errorf("post-source-create migrations: %w", err)
-		}
 		if bindingChanged {
 			fmt.Printf("Account %s: OAuth app binding updated to %q.\n", email, resolvedApp)
 		} else {
@@ -352,15 +339,6 @@ func runAddAccountLocal(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("set display name: %w", err)
 		}
 	}
-	// Auto-default-identity must run BEFORE the legacy migration
-	// retry — see comment on the token-reusable path above.
-	if !noDefaultIdentityAddAccount {
-		confirmDefaultIdentity(cmd.OutOrStdout(), s, source.ID, email, email, "account-identifier")
-	}
-	if err := runPostSourceCreateMigrations(s); err != nil {
-		return fmt.Errorf("post-source-create migrations: %w", err)
-	}
-
 	fmt.Printf("\nAccount %s authorized successfully!\n", email)
 	fmt.Println("You can now run: msgvault sync-full", email)
 
@@ -395,7 +373,6 @@ func registerAddAccountFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&forceReauth, "force", false, "Replace the existing token only after validation")
 	cmd.Flags().StringVar(&accountDisplayName, "display-name", "", "Display name for the account (e.g., \"Work\", \"Personal\")")
 	cmd.Flags().StringVar(&oauthAppName, "oauth-app", "", "Named OAuth app from config (for Google Workspace orgs)")
-	cmd.Flags().BoolVar(&noDefaultIdentityAddAccount, "no-default-identity", false, noDefaultIdentityHelp)
 }
 
 func init() {

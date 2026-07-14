@@ -45,7 +45,6 @@ type Stats struct {
 	Messages        int64     `json:"messages"`
 	Conversations   int64     `json:"conversations"`
 	Sources         int64     `json:"sources"`
-	Accounts        int64     `json:"accounts"`
 	AttachmentRows  int64     `json:"attachment_rows"`
 	AttachmentBlobs int64     `json:"attachment_blobs"`
 	Labels          int64     `json:"labels"`
@@ -70,7 +69,6 @@ func computeManifestStats(ctx context.Context, q rowQuerier) (Stats, error) {
 		{&st.Messages, "SELECT COUNT(*) FROM messages"},
 		{&st.Conversations, "SELECT COUNT(*) FROM conversations"},
 		{&st.Sources, "SELECT COUNT(*) FROM sources"},
-		{&st.Accounts, "SELECT COUNT(*) FROM account_identities"},
 		{&st.Labels, "SELECT COUNT(*) FROM labels"},
 		{&st.AttachmentRows, "SELECT COUNT(*) FROM attachments"},
 		{&st.AttachmentBlobs, attachmentBlobsQuery},

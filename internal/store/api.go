@@ -93,8 +93,7 @@ func (s *Store) ListMessages(offset, limit int) ([]APIMessage, int64, error) {
 // request is abandoned or times out.
 func (s *Store) ListMessagesContext(ctx context.Context, offset, limit int) ([]APIMessage, int64, error) {
 	// Get total count. Use the canonical live-messages predicate so
-	// dedup-hidden rows (deleted_at) are excluded alongside source-
-	// deleted rows.
+	// Source-deleted rows are excluded.
 	var total int64
 	err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM messages WHERE "+LiveMessagesWhere("", true),

@@ -490,44 +490,6 @@ func (s *Store) InitSchema() error {
 		}
 	}
 
-	// Legacy databases may hold duplicate (message_id, content_hash)
-	// attachment rows from the old SELECT-then-INSERT UpsertAttachment.
-	// Dedupe before creating the partial unique index that enforces
-	// idempotency going forward. Gated on the applied_migrations ledger:
-	// the dedupe's GROUP BY over the full attachments table is not free on
-	// a large archive, and it never finds work after the first run.
-	//
-	// Both steps run under runMaintenance: on a large archive the dedupe
-	// DELETE and the unique-index build over the full attachments table
-	// exceed the pool-wide 30s statement_timeout, so the maintenance escape
-	// hatch disables it for this transaction (finding S1). They share one tx
-	// so the index is built against the just-deduped table. No-op timeout
-	// reset on SQLite.
-	attachmentsMigrated, err := s.IsMigrationApplied(migrationAttachmentsContentHashUnique)
-	if err != nil {
-		return err
-	}
-	if !attachmentsMigrated {
-		if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
-			if err := s.dedupeAttachmentsBeforeUniqueIndex(ctx, tx); err != nil {
-				return fmt.Errorf("dedupe attachments: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `
-				CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_msg_content_hash
-				    ON attachments(message_id, content_hash)
-				    WHERE content_hash IS NOT NULL AND content_hash != ''
-			`); err != nil {
-				return fmt.Errorf("create idx_attachments_msg_content_hash: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		if err := s.MarkMigrationApplied(migrationAttachmentsContentHashUnique); err != nil {
-			return err
-		}
-	}
-
 	// Partial covering index for the ListMessages page (GET /api/v1/messages).
 	// That query counts and paginates live messages ordered by
 	// COALESCE(sent_at, received_at, internal_date) DESC, id DESC. Without an
@@ -542,15 +504,15 @@ func (s *Store) InitSchema() error {
 		_, err := tx.ExecContext(ctx, `
 			CREATE INDEX IF NOT EXISTS idx_messages_live_sent_at
 			    ON messages(COALESCE(sent_at, received_at, internal_date) DESC, id DESC)
-			    WHERE deleted_at IS NULL AND deleted_from_source_at IS NULL
+			    WHERE deleted_from_source_at IS NULL
 		`)
 		return err
 	}); err != nil {
 		return fmt.Errorf("create idx_messages_live_sent_at: %w", err)
 	}
 
-	// Keep tombstone and dedup-hidden counts proportional to deleted rows
-	// instead of scanning the full archive.
+	// Keep tombstone counts proportional to deleted rows instead of scanning
+	// the full archive.
 	if err := s.runMaintenance(context.Background(), func(ctx context.Context, tx *loggedTx) error {
 		if _, err := tx.ExecContext(ctx, `
 			CREATE INDEX IF NOT EXISTS idx_messages_deleted_from_source_at
@@ -559,12 +521,7 @@ func (s *Store) InitSchema() error {
 		`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `
-			CREATE INDEX IF NOT EXISTS idx_messages_deleted_at
-			    ON messages(deleted_at)
-			    WHERE deleted_at IS NOT NULL
-		`)
-		return err
+		return nil
 	}); err != nil {
 		return fmt.Errorf("create deletion timestamp indexes: %w", err)
 	}
@@ -589,24 +546,6 @@ func (s *Store) InitSchema() error {
 	s.fts5Available = s.dialect.FTSAvailable(s.db.DB)
 
 	return nil
-}
-
-// dedupeAttachmentsBeforeUniqueIndex removes duplicate
-// (message_id, content_hash) rows from attachments so the partial
-// unique index idx_attachments_msg_content_hash can be created. Pre-fix
-// UpsertAttachment used a SELECT-then-INSERT pattern that could create
-// duplicates under concurrency; this cleans them up once. Idempotent.
-func (s *Store) dedupeAttachmentsBeforeUniqueIndex(ctx context.Context, tx *loggedTx) error {
-	_, err := tx.ExecContext(ctx, `
-		DELETE FROM attachments
-		WHERE content_hash IS NOT NULL AND content_hash != ''
-		  AND id NOT IN (
-			SELECT MIN(id) FROM attachments
-			WHERE content_hash IS NOT NULL AND content_hash != ''
-			GROUP BY message_id, content_hash
-		  )
-	`)
-	return err
 }
 
 // NeedsFTSBackfill reports whether the FTS index needs to be populated.
@@ -635,14 +574,13 @@ func (s *Store) NeedsFTSBackfillQuick() bool {
 // Stats holds database statistics.
 //
 // MessageCount is the count of active messages: those still present in the
-// source account (deleted_at IS NULL AND deleted_from_source_at IS NULL).
+// source account (deleted_from_source_at IS NULL).
 // SourceDeletedCount is the count of archived messages that were deleted from
-// the source account but are retained in the archive (deleted_at IS NULL AND
-// deleted_from_source_at IS NOT NULL). The archive is the system of record,
+// the source account but are retained in the archive
+// (deleted_from_source_at IS NOT NULL). The archive is the system of record,
 // so the canonical total is MessageCount + SourceDeletedCount; callers that
 // display a total must label the two populations rather than pick one
-// silently. Dedup-hidden rows (deleted_at IS NOT NULL) are excluded from
-// both counts.
+// silently.
 type Stats struct {
 	MessageCount       int64
 	SourceDeletedCount int64
@@ -669,7 +607,7 @@ func (s *Store) GetStatsContext(ctx context.Context) (*Stats, error) {
 // GetStatsForScope returns statistics scoped to the given source IDs.
 // When sourceIDs is nil or empty, returns global counts.
 // All message-derived counts (threads, attachments, labels) exclude
-// dedup-hidden and source-deleted messages via LiveMessagesWhere.
+// source-deleted messages via LiveMessagesWhere.
 // DatabaseSize is always the global file size — it cannot be decomposed per source.
 func (s *Store) GetStatsForScope(sourceIDs []int64) (*Stats, error) {
 	return s.GetStatsForScopeContext(context.Background(), sourceIDs)
@@ -687,8 +625,8 @@ func (s *Store) GetStatsForScopeContext(ctx context.Context, sourceIDs []int64) 
 
 	if len(sourceIDs) == 0 {
 		// Unscoped: global catalog counts, matching pre-slice-3 semantics.
-		// All message-linked counts apply LiveMessagesWhere so dedup-hidden
-		// and source-deleted rows aren't reported as live rows.
+		// All message-linked counts apply LiveMessagesWhere so source-deleted
+		// rows aren't reported as live rows.
 		queries = []struct {
 			query string
 			args  []any

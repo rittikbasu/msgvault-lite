@@ -27,7 +27,6 @@ func seedDB(t *testing.T) string {
 		`CREATE TABLE messages (id INTEGER PRIMARY KEY, sent_at TEXT)`,
 		`CREATE TABLE conversations (id INTEGER PRIMARY KEY)`,
 		`CREATE TABLE sources (id INTEGER PRIMARY KEY)`,
-		`CREATE TABLE account_identities (id INTEGER PRIMARY KEY)`,
 		`CREATE TABLE labels (id INTEGER PRIMARY KEY)`,
 		`CREATE TABLE attachments (id INTEGER PRIMARY KEY,
 			content_hash TEXT, storage_path TEXT,

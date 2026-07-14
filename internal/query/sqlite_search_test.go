@@ -511,10 +511,7 @@ func TestMergeFilterIntoQuery_SliceAliasingMutation(t *testing.T) {
 }
 
 // TestSearchByDomains_HidesDeleted verifies SearchByDomains applies the
-// same live-message filter as Search/SearchFast: dedup losers (deleted_at)
-// are always hidden, and source-deleted rows (deleted_from_source_at) are
-// hidden too. Without the predicate this MCP-facing surface would surface
-// rows that every other read path suppresses.
+// same source-deletion filter as Search/SearchFast.
 func TestSearchByDomains_HidesDeleted(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -525,17 +522,13 @@ func TestSearchByDomains_HidesDeleted(t *testing.T) {
 	require.NoError(err, "SearchByDomains baseline")
 	require.Len(all, 5, "baseline result count")
 
-	// Dedup-soft-delete one message — must always be hidden.
-	env.MarkDedupLoserByID(1)
-	// Source-delete another — also hidden by the full live-message predicate.
-	env.MarkDeletedByID(2)
+	env.MarkDeletedByID(1)
 
 	results, err := env.Engine.SearchByDomains(ctx, []string{"example.com"}, nil, nil, 100, 0)
 	require.NoError(err, "SearchByDomains after deletes")
-	assert.Len(results, 3, "after deletes")
+	assert.Len(results, 4, "after delete")
 	for _, r := range results {
-		assert.NotEqual(int64(1), r.ID, "dedup-loser message 1 leaked into results")
-		assert.NotEqual(int64(2), r.ID, "source-deleted message 2 leaked into results")
+		assert.NotEqual(int64(1), r.ID, "source-deleted message leaked into results")
 	}
 }
 

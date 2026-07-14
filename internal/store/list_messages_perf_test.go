@@ -76,10 +76,9 @@ func explainPlan(t *testing.T, s *Store, sql string, args ...any) string {
 	return b.String()
 }
 
-// TestListMessages_UsesLiveIndex verifies the ListMessages COUNT and page
-// queries are served by idx_messages_live_sent_at instead of a full table
-// scan + temp-B-tree sort. This locks in the perf fix for GET /api/v1/messages,
-// which was seconds per page on a multi-GB SQLite archive.
+// TestListMessages_UsesLiveIndex verifies the ListMessages count and page
+// queries use source-deletion-aware indexes instead of a full table scan and
+// temp-B-tree sort.
 func TestListMessages_UsesLiveIndex(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
@@ -101,8 +100,8 @@ func TestListMessages_UsesLiveIndex(t *testing.T) {
 
 	countSQL := "SELECT COUNT(*) FROM messages WHERE " + LiveMessagesWhere("", true)
 	countPlan := explainPlan(t, s, countSQL)
-	assert.Contains(countPlan, "idx_messages_live_sent_at",
-		"COUNT should use the partial index, not a full scan:\n%s", countPlan)
+	assert.Contains(countPlan, "idx_messages_deleted",
+		"COUNT should use the source-deletion index, not a full scan:\n%s", countPlan)
 
 	pageSQL := fmt.Sprintf(`SELECT m.id FROM messages m
 		WHERE %s

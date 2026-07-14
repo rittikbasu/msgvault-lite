@@ -1416,7 +1416,7 @@ func (e *SQLiteEngine) accountsForGmailIDChunk(ctx context.Context, gmailIDs []s
 // SearchByDomains returns messages where any participant (from, to, cc, or bcc)
 // belongs to one of the given domains. Uses the shared executeSearchQuery
 // path so results carry the same fields as Search/SearchFast (including
-// deleted_at, conversation_title, message_type, and labels).
+// source-deletion time, conversation title, message type, and labels).
 func (e *SQLiteEngine) SearchByDomains(ctx context.Context, domains []string, after, before *time.Time, limit, offset int) ([]MessageSummary, error) {
 	if len(domains) == 0 {
 		return nil, nil
@@ -1431,8 +1431,8 @@ func (e *SQLiteEngine) SearchByDomains(ctx context.Context, domains []string, af
 	}
 
 	conditions := []string{emailOnlyFilterM}
-	// Hide dedup losers (deleted_at) and source-deleted rows so this MCP-facing
-	// surface matches the visibility rules of Search/SearchFast.
+	// Hide source-deleted rows so this bulk-search surface has the same
+	// live-message semantics as Search/SearchFast.
 	conditions = append(conditions,
 		store.LiveMessagesWhere("m", true),
 		fmt.Sprintf(`EXISTS (

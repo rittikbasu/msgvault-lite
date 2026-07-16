@@ -13,9 +13,9 @@ if (-not $commit) { $commit = "unknown" }
 $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 $ldflags = @(
-    "-X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=$version"
-    "-X go.kenn.io/msgvault/cmd/msgvault/cmd.Commit=$commit"
-    "-X go.kenn.io/msgvault/cmd/msgvault/cmd.BuildDate=$buildDate"
+    "-X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.Version=$version"
+    "-X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.Commit=$commit"
+    "-X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.BuildDate=$buildDate"
 ) -join ' '
 
 $env:CGO_ENABLED = 1

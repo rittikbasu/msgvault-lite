@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/fileutil"
+	"github.com/rittikbasu/msgvault-lite/internal/fileutil"
 	"golang.org/x/oauth2"
 )
 

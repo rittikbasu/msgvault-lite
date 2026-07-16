@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/testutil/storetest"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/storetest"
 )
 
 // setDeletedFromSource marks a message as deleted from its source account

@@ -13,10 +13,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/config"
-	"go.kenn.io/msgvault/internal/export"
-	"go.kenn.io/msgvault/internal/gmail"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/config"
+	"github.com/rittikbasu/msgvault-lite/internal/export"
+	"github.com/rittikbasu/msgvault-lite/internal/gmail"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 // TestIsFTSIntegrityError_Classification verifies that the hint-classifier

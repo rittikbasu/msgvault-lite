@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/msgvault/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
 )
 
 // TestSearchMessagesQueryImpl_NoFTS_TokenlessTerms guards the LIKE fallback

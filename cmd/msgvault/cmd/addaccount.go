@@ -7,8 +7,8 @@ import (
 	"slices"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/msgvault/internal/oauth"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/oauth"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 var (

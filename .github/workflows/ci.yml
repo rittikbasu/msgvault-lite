@@ -50,7 +50,7 @@ jobs:
           VERSION="ci-$COMMIT"
 
           mkdir -p dist
-          LDFLAGS="-s -w -X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=${VERSION} -X go.kenn.io/msgvault/cmd/msgvault/cmd.Commit=${COMMIT} -X go.kenn.io/msgvault/cmd/msgvault/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.Version=${VERSION} -X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.Commit=${COMMIT} -X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           go build -tags "fts5" -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
 
           echo "--- Binary info ---"

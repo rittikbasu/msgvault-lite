@@ -8,10 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/query"
-	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/store"
-	"go.kenn.io/msgvault/internal/testutil"
+	"github.com/rittikbasu/msgvault-lite/internal/query"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil"
 )
 
 // TestDateBoundary_StoreAPIMatchesEngine pins the C8 fix: the store-API

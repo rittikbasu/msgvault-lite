@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/testutil"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil"
 )
 
 func TestFreshArchiveUsesForkNativeSchema(t *testing.T) {

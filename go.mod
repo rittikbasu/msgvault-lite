@@ -1,4 +1,4 @@
-module go.kenn.io/msgvault
+module github.com/rittikbasu/msgvault-lite
 
 go 1.26.5
 

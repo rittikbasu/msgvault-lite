@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 // SQLiteEngine executes queries against the msgvault SQLite database.

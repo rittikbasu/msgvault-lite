@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/msgvault/internal/fileutil"
+	"github.com/rittikbasu/msgvault-lite/internal/fileutil"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )

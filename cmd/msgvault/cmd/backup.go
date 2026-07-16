@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/backup"
-	"go.kenn.io/msgvault/internal/backupapp"
+	"github.com/rittikbasu/msgvault-lite/internal/backupapp"
 )
 
 var (

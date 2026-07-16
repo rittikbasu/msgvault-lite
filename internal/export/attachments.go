@@ -13,9 +13,9 @@ import (
 	"strings"
 	"syscall"
 
-	"go.kenn.io/msgvault/internal/fileutil"
+	"github.com/rittikbasu/msgvault-lite/internal/fileutil"
 
-	"go.kenn.io/msgvault/internal/query"
+	"github.com/rittikbasu/msgvault-lite/internal/query"
 )
 
 // ErrInvalidContentHash is returned when a content hash fails validation.

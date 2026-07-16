@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/store"
-	"go.kenn.io/msgvault/internal/testutil"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil"
 )
 
 var globalCounter atomic.Int64

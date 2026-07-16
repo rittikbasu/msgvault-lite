@@ -26,15 +26,15 @@ buildGoModule {
   ldflags = [
     "-s"
     "-w"
-    "-X go.kenn.io/msgvault/cmd/msgvault/cmd.Version=${version}"
+    "-X github.com/rittikbasu/msgvault-lite/cmd/msgvault/cmd.Version=${version}"
   ];
 
   doCheck = false;
 
   meta = {
     description = "Offline Gmail archive with full-text search";
-    homepage = "https://github.com/kenn-io/msgvault";
-    license = lib.licenses.asl20;
+    homepage = "https://github.com/rittikbasu/msgvault-lite";
+    license = lib.licenses.mit;
     mainProgram = "msgvault";
   };
 }

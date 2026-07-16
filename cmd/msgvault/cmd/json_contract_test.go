@@ -14,8 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/query"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/query"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 func decodeJSONObject(t *testing.T, data []byte) map[string]any {

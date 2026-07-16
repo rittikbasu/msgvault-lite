@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/testutil/dbtest"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/dbtest"
 )
 
 func TestAggregations(t *testing.T) {

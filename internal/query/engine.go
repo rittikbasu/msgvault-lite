@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"go.kenn.io/msgvault/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
 )
 
 // Engine is the interface for SQLite query operations.

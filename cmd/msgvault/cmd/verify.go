@@ -12,11 +12,11 @@ import (
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
-	"go.kenn.io/msgvault/internal/export"
-	"go.kenn.io/msgvault/internal/gmail"
-	"go.kenn.io/msgvault/internal/mime"
-	"go.kenn.io/msgvault/internal/oauth"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/export"
+	"github.com/rittikbasu/msgvault-lite/internal/gmail"
+	"github.com/rittikbasu/msgvault-lite/internal/mime"
+	"github.com/rittikbasu/msgvault-lite/internal/oauth"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 	"golang.org/x/oauth2"
 )
 

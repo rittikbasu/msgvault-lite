@@ -13,7 +13,7 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/encoding/traditionalchinese"
 
-	"go.kenn.io/msgvault/internal/testutil"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil"
 )
 
 func TestEnsureUTF8_AlreadyValid(t *testing.T) {

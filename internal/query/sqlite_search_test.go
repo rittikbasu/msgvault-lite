@@ -9,8 +9,8 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/testutil/ptr"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/ptr"
 )
 
 func TestSearch_Filters(t *testing.T) {

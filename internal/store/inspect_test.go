@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/testutil"
-	"go.kenn.io/msgvault/internal/testutil/storetest"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/storetest"
 )
 
 // TestInspectMessage_NotFound verifies that InspectMessage returns sql.ErrNoRows

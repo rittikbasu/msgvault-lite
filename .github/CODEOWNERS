@@ -5,15 +5,15 @@
 # - Go module dependencies (supply chain entry point)
 
 # All GitHub Actions workflows require owner approval
-.github/workflows/** @wesm
+.github/workflows/** @rittikbasu
 
 # Security-critical configuration
-.github/CODEOWNERS @wesm
-renovate.json @wesm
+.github/CODEOWNERS @rittikbasu
+renovate.json @rittikbasu
 
 # Supply chain: Go dependency changes require owner approval
-go.mod @wesm
-go.sum @wesm
+go.mod @rittikbasu
+go.sum @rittikbasu
 
 # Security documentation
-SECURITY.md @wesm
+SECURITY.md @rittikbasu

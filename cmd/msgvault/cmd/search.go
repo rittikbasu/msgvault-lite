@@ -8,9 +8,9 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/msgvault/internal/query"
-	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/query"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 var (

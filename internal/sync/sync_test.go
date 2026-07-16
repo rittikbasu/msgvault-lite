@@ -15,10 +15,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/gmail"
-	"go.kenn.io/msgvault/internal/mime"
-	"go.kenn.io/msgvault/internal/store"
-	testemail "go.kenn.io/msgvault/internal/testutil/email"
+	"github.com/rittikbasu/msgvault-lite/internal/gmail"
+	"github.com/rittikbasu/msgvault-lite/internal/mime"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
+	testemail "github.com/rittikbasu/msgvault-lite/internal/testutil/email"
 )
 
 // panicOnBatchAPI wraps a MockAPI and panics when GetMessagesRawBatch is called.

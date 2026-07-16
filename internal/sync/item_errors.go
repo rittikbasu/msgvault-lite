@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"go.kenn.io/msgvault/internal/gmail"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/gmail"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 const (

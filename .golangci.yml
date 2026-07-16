@@ -170,7 +170,7 @@ linters:
       # decorators over its interfaces return those verbatim, and wrapping would
       # break that detection.
       ignore-package-globs:
-        - go.kenn.io/msgvault/*
+        - github.com/rittikbasu/msgvault-lite/*
         - github.com/doordash-oss/oapi-codegen-dd/*
         - database/sql
         - database/sql/*

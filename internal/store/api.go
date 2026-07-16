@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/msgvault/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
 )
 
 // participantDisplaySQL formats a participant joined as `p` (with the

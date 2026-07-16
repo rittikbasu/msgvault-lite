@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"go.kenn.io/msgvault/internal/fileutil"
+	"github.com/rittikbasu/msgvault-lite/internal/fileutil"
 )
 
 // IdentityConfig holds the user's curated identity addresses.

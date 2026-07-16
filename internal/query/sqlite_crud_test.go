@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/testutil/dbtest"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/dbtest"
 )
 
 // emptyTargets creates an EmptyValueTargets map for testing with the given ViewType(s).

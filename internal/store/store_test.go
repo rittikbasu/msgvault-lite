@@ -11,10 +11,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/mime"
-	"go.kenn.io/msgvault/internal/store"
-	"go.kenn.io/msgvault/internal/testutil"
-	"go.kenn.io/msgvault/internal/testutil/storetest"
+	"github.com/rittikbasu/msgvault-lite/internal/mime"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/storetest"
 )
 
 var sampleRawMessage = []byte("From: test@example.com\r\nSubject: Test\r\n\r\nBody")

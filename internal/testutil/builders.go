@@ -3,7 +3,7 @@ package testutil
 import (
 	"time"
 
-	"go.kenn.io/msgvault/internal/query"
+	"github.com/rittikbasu/msgvault-lite/internal/query"
 )
 
 // MessageSummaryBuilder provides a fluent API for constructing query.MessageSummary in tests.

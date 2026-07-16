@@ -11,8 +11,8 @@ import (
 	"slices"
 	"strings"
 
-	"go.kenn.io/msgvault/internal/mime"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/mime"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 // participantNameExpr returns the SQL expression for a participant's display

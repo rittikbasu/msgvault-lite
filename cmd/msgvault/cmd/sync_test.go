@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/config"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/config"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 // fakeClientSecrets is a minimal Google OAuth client_secret.json that

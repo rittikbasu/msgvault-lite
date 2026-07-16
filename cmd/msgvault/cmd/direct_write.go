@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/msgvault/internal/config"
-	"go.kenn.io/msgvault/internal/store"
+	"github.com/rittikbasu/msgvault-lite/internal/config"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 // acquireDirectSQLiteWriteLock claims the cross-process write-owner lock on

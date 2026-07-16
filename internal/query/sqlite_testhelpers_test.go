@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/msgvault/internal/search"
-	"go.kenn.io/msgvault/internal/testutil/dbtest"
+	"github.com/rittikbasu/msgvault-lite/internal/search"
+	"github.com/rittikbasu/msgvault-lite/internal/testutil/dbtest"
 )
 
 // testEnv encapsulates the DB, Engine, and Context setup for tests.

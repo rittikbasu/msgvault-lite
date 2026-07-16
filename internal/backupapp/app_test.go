@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/kit/backup"
-	"go.kenn.io/msgvault/internal/backupapp"
+	"github.com/rittikbasu/msgvault-lite/internal/backupapp"
 )
 
 // seedDB creates the minimal msgvault-shaped schema (same shape as the

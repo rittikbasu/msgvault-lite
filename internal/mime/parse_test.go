@@ -7,7 +7,7 @@ import (
 	"github.com/jhillyerd/enmime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	testemail "go.kenn.io/msgvault/internal/testutil/email"
+	testemail "github.com/rittikbasu/msgvault-lite/internal/testutil/email"
 )
 
 // emailOptions is an alias for testemail.Options for local convenience.

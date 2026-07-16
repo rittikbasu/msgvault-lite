@@ -12,6 +12,24 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestSecureWriteFileSetsCurrentUserOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private.json")
+	require.NoError(t, SecureWriteFile(path, []byte("private"), 0o600))
+
+	sd, err := windows.GetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+	)
+	require.NoError(t, err)
+	owner, _, err := sd.Owner()
+	require.NoError(t, err)
+	currentUser, err := currentUserSID()
+	require.NoError(t, err)
+	require.NotNil(t, owner)
+	assert.True(t, owner.Equals(currentUser), "private file owner must be the current user")
+}
+
 func TestReadPrivateFileRejectsBroadDACL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private.json")
 	require.NoError(t, SecureWriteFile(path, []byte("private"), 0o600))

@@ -167,12 +167,14 @@ func restrictToCurrentUser(path string) error {
 		return fmt.Errorf("fileutil: build ACL for %s: %w", path, err)
 	}
 
-	secInfo := windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION
+	secInfo := windows.OWNER_SECURITY_INFORMATION |
+		windows.DACL_SECURITY_INFORMATION |
+		windows.PROTECTED_DACL_SECURITY_INFORMATION
 	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
 		windows.SECURITY_INFORMATION(secInfo),
-		nil,
+		userSID,
 		nil,
 		acl,
 		nil,

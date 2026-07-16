@@ -6,11 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rittikbasu/msgvault-lite/internal/config"
+	"github.com/rittikbasu/msgvault-lite/internal/fileutil"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/rittikbasu/msgvault-lite/internal/config"
-	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 // fakeClientSecrets is a minimal Google OAuth client_secret.json that
@@ -50,11 +51,11 @@ func TestSyncFullCmd_MalformedDateRejectsBeforeSync(t *testing.T) {
 	// Write OAuth client secrets and a fake token so the Gmail
 	// source passes discovery checks (HasAnyConfig + HasToken).
 	secretsPath := filepath.Join(tmpDir, "client_secret.json")
-	require.NoError(os.WriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write client secrets")
+	require.NoError(fileutil.SecureWriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write client secrets")
 	tokensDir := filepath.Join(tmpDir, "tokens")
 	require.NoError(os.MkdirAll(tokensDir, 0700), "create tokens dir")
 	fakeToken := `{"access_token":"fake","token_type":"Bearer"}`
-	require.NoError(os.WriteFile(filepath.Join(tokensDir, "g@example.com.json"), []byte(fakeToken), 0600), "write fake token")
+	require.NoError(fileutil.SecureWriteFile(filepath.Join(tokensDir, "g@example.com.json"), []byte(fakeToken), 0600), "write fake token")
 
 	savedCfg := cfg
 	savedLogger := logger
@@ -125,7 +126,7 @@ func TestSyncCmd_GmailOnlyBrokenOAuthSurfacesError(t *testing.T) {
 			secretsPath := filepath.Join(
 				tmpDir, "client_secret.json",
 			)
-			require.NoError(os.WriteFile(
+			require.NoError(fileutil.SecureWriteFile(
 				secretsPath, []byte("not json"), 0600,
 			), "write secrets")
 

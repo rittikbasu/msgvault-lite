@@ -10,12 +10,13 @@ import (
 
 	"testing"
 
+	"github.com/rittikbasu/msgvault-lite/internal/config"
+	"github.com/rittikbasu/msgvault-lite/internal/fileutil"
+	"github.com/rittikbasu/msgvault-lite/internal/oauth"
+	"github.com/rittikbasu/msgvault-lite/internal/store"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/rittikbasu/msgvault-lite/internal/config"
-	"github.com/rittikbasu/msgvault-lite/internal/oauth"
-	"github.com/rittikbasu/msgvault-lite/internal/store"
 )
 
 func TestAddAccountForceHelpDescribesValidatedReplacement(t *testing.T) {
@@ -85,10 +86,10 @@ func TestAddAccount_InheritedBindingValidatesToken(t *testing.T) {
 				"client_id":     tc.clientID,
 				"scopes":        oauth.Scopes,
 			})
-			require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@acme.com.json"), tokenData, 0600), "write token")
+			require.NoError(fileutil.SecureWriteFile(filepath.Join(tokensDir, "user@acme.com.json"), tokenData, 0600), "write token")
 
 			secretsPath := filepath.Join(tmpDir, "secret.json")
-			require.NoError(os.WriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write secrets")
+			require.NoError(fileutil.SecureWriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write secrets")
 
 			savedCfg, savedLogger, savedOAuthApp := cfg, logger, oauthAppName
 			defer func() { cfg, logger, oauthAppName = savedCfg, savedLogger, savedOAuthApp }()
@@ -145,10 +146,10 @@ func TestAddAccount_CalendarOnlyTokenRequiresGmailReauth(t *testing.T) {
 		"scopes":        []string{"https://www.googleapis.com/auth/calendar.readonly"},
 	})
 	require.NoError(err, "marshal token")
-	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
+	require.NoError(fileutil.SecureWriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
 
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write secrets")
+	require.NoError(fileutil.SecureWriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write secrets")
 
 	savedCfg, savedLogger, savedOAuthApp := cfg, logger, oauthAppName
 	defer func() { cfg, logger, oauthAppName = savedCfg, savedLogger, savedOAuthApp }()
@@ -206,10 +207,10 @@ func TestAddAccount_OverprivilegedGmailTokenRequiresReauth(t *testing.T) {
 		},
 	})
 	require.NoError(err, "marshal token")
-	require.NoError(os.WriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
+	require.NoError(fileutil.SecureWriteFile(filepath.Join(tokensDir, "user@example.com.json"), tokenData, 0600), "write token")
 
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write secrets")
+	require.NoError(fileutil.SecureWriteFile(secretsPath, []byte(fakeClientSecrets), 0600), "write secrets")
 
 	savedCfg, savedLogger, savedOAuthApp := cfg, logger, oauthAppName
 	savedHeadless, savedForceReauth := headless, forceReauth
@@ -291,11 +292,11 @@ func TestAddAccount_RebindWithExistingToken(t *testing.T) {
 	})
 	require.NoError(err, "marshal token")
 	tokenPath := filepath.Join(tokensDir, "user@acme.com.json")
-	require.NoError(os.WriteFile(tokenPath, tokenData, 0600), "write token")
+	require.NoError(fileutil.SecureWriteFile(tokenPath, tokenData, 0600), "write token")
 
 	// Write fake client secrets
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		secretsPath, []byte(fakeClientSecrets), 0600,
 	), "write secrets")
 
@@ -375,13 +376,13 @@ func TestAddAccount_NewRegistrationRejectsMismatchedToken(t *testing.T) {
 		"client_id":     "wrong-client.apps.googleusercontent.com",
 	})
 	require.NoError(err, "marshal token")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		filepath.Join(tokensDir, "new@acme.com.json"),
 		tokenData, 0600,
 	), "write token")
 
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		secretsPath, []byte(fakeClientSecrets), 0600,
 	), "write secrets")
 
@@ -446,13 +447,13 @@ func TestAddAccount_ExplicitDefaultRejectsMismatchedToken(t *testing.T) {
 		"client_id":     "wrong-client.apps.googleusercontent.com",
 	})
 	require.NoError(err, "marshal token")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		filepath.Join(tokensDir, "user@example.com.json"),
 		tokenData, 0600,
 	), "write token")
 
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		secretsPath, []byte(fakeClientSecrets), 0600,
 	), "write secrets")
 
@@ -512,13 +513,13 @@ func TestAddAccount_ExplicitDefaultAcceptsMatchingToken(t *testing.T) {
 		"scopes":        oauth.Scopes,
 	})
 	require.NoError(err, "marshal token")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		filepath.Join(tokensDir, "user@example.com.json"),
 		tokenData, 0600,
 	), "write token")
 
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		secretsPath, []byte(fakeClientSecrets), 0600,
 	), "write secrets")
 
@@ -580,7 +581,7 @@ func TestAddAccount_ForceRebindPreservesBindingOnFailure(t *testing.T) {
 	_ = s.Close()
 
 	secretsPath := filepath.Join(tmpDir, "secret.json")
-	require.NoError(os.WriteFile(
+	require.NoError(fileutil.SecureWriteFile(
 		secretsPath, []byte(fakeClientSecrets), 0600,
 	), "write secrets")
 
